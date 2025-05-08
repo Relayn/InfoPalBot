@@ -1,0 +1,31 @@
+# Core dependencies
+fastapi
+uvicorn
+pytz # Для работы с часовыми поясами (используется в моделях БД)
+
+# Telegram Bot library
+aiogram
+
+# Database ORM and driver
+# Используем sqlmodel[sqlite] для SQLite.
+# Для PostgreSQL нужно было бы sqlmodel[psycopg2-binary] или sqlmodel[asyncpg]
+sqlmodel[sqlite]
+
+# HTTP client for external APIs
+httpx
+
+# Environment variable management
+python-dotenv
+pydantic-settings
+
+# Scheduler (для регулярных рассылок)
+APScheduler
+
+# Testing dependencies
+pytest
+pytest-asyncio
+httpx[testing] # Утилиты для тестирования httpx
+
+# Code formatting and linting
+black
+ruff # Современная альтернатива flake8 и isort
