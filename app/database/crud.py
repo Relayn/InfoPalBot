@@ -1,6 +1,8 @@
 from sqlmodel import Session, select
-from typing import Optional, List # Добавляем List
-from app.database.models import User, Subscription # Импортируем модель Subscription
+from typing import Optional, List
+from datetime import datetime, timezone # Убедимся, что timezone импортирован
+
+from app.database.models import User, Subscription, Log # Импортируем Log
 
 # --- CRUD для User (существующий код) ---
 def get_user_by_telegram_id(session: Session, telegram_id: int) -> Optional[User]:
@@ -138,11 +140,52 @@ def delete_subscription(session: Session, subscription_id: int) -> bool:
     return True
 
 
-# def get_all_active_subscriptions_for_info_type(...):
-#     # Может понадобиться для рассылки: получить всех, кто подписан на определенный тип информации
-#     pass
+def get_active_subscriptions_by_info_type(session: Session, info_type: str) -> List[Subscription]:
+    """
+    Получает все активные подписки для указанного типа информации.
+
+    Args:
+        session (Session): Сессия базы данных SQLModel.
+        info_type (str): Тип информации (например, "weather", "news").
+
+    Returns:
+        List[Subscription]: Список активных подписок данного типа.
+    """
+    statement = select(Subscription).where(
+        Subscription.info_type == info_type,
+        Subscription.status == "active"
+    )
+    subscriptions = session.exec(statement).all()
+    return subscriptions
 
 # def update_subscription_frequency(...):
 #     pass
 
-# TODO: CRUD для Log
+def create_log_entry(session: Session,
+                       user_id: Optional[int], # Может быть None, если действие не от конкретного пользователя
+                       command: str,
+                       details: Optional[str] = None) -> Log:
+    """
+    Создает новую запись в логе действий.
+
+    Args:
+        session (Session): Сессия базы данных SQLModel.
+        user_id (Optional[int]): ID пользователя (из таблицы User), если применимо.
+        command (str): Выполненная команда или тип действия (например, "/start", "subscribe_weather").
+        details (Optional[str]): Дополнительные детали действия (например, аргументы команды).
+
+    Returns:
+        Log: Созданный объект лога.
+    """
+    db_log = Log(
+        user_id=user_id,
+        command=command,
+        details=details
+        # timestamp устанавливается автоматически через default_factory в модели
+    )
+    session.add(db_log)
+    session.commit()
+    session.refresh(db_log)
+    # Логирование самого лога в консоль может быть избыточным, но для отладки можно:
+    # print(f"Запись в лог добавлена: {db_log}")
+    return db_log

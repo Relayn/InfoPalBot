@@ -23,6 +23,8 @@ from app.database.crud import (
 from app.api_clients.weather import get_weather_data
 from app.api_clients.news import get_top_headlines
 from app.api_clients.events import get_kudago_events
+from app.scheduler.main import init_scheduler, shutdown_scheduler, set_bot_instance
+from .constants import INFO_TYPE_WEATHER, INFO_TYPE_NEWS, INFO_TYPE_EVENTS, KUDAGO_LOCATION_SLUGS
 
 # Настройка логирования
 logging.basicConfig(level=settings.LOG_LEVEL,
@@ -35,16 +37,6 @@ bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, default=default_properties)
 
 # Инициализация диспетчера
 dp = Dispatcher()
-
-# Словарь для сопоставления названий городов и кодов KudaGo
-KUDAGO_LOCATION_SLUGS = {
-    "москва": "msk", "мск": "msk", "moscow": "msk",
-    "санкт-петербург": "spb", "спб": "spb", "питер": "spb", "saint petersburg": "spb",
-    "новосибирск": "nsk", "нск": "nsk",
-    "екатеринбург": "ekb", "екб": "ekb",
-    "казань": "kzn",
-    "нижний новгород": "nnv",
-}
 
 # --- Определяем состояния FSM для подписки ---
 class SubscriptionStates(StatesGroup):
@@ -179,10 +171,6 @@ async def process_events_command(message: types.Message, command: CommandObject)
 
 
 # --- Обработчики для /subscribe и FSM ---
-
-INFO_TYPE_WEATHER = "weather"
-INFO_TYPE_NEWS = "news"
-INFO_TYPE_EVENTS = "events"
 
 @dp.message(Command('subscribe'), StateFilter(None))
 async def process_subscribe_command_start(message: types.Message, state: FSMContext):
@@ -430,6 +418,8 @@ async def process_unsubscribe_action_cancel(callback_query: types.CallbackQuery,
 async def on_startup():
     logger.info("Бот запускается...")
     create_db_and_tables()
+    set_bot_instance(bot)
+    init_scheduler()
     commands_to_set = [
         types.BotCommand(command="start", description="🚀 Запуск и регистрация"),
         types.BotCommand(command="help", description="❓ Помощь по командам"),
@@ -450,6 +440,7 @@ async def on_startup():
 
 async def on_shutdown():
     logger.info("Бот останавливается...")
+    shutdown_scheduler()
     logger.info("Бот остановлен.")
 
 # Главная точка входа для запуска бота
