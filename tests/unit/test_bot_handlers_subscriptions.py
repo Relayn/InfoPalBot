@@ -55,18 +55,22 @@ async def test_process_mysubscriptions_command_no_user_sub(session_sub):
     # Мокаем get_session так, чтобы он возвращал контекстный менеджер, который дает нашу session_sub
     mock_session_context_manager = MagicMock()
     mock_session_context_manager.__enter__.return_value = session_sub
-    with patch('app.bot.main.get_session', return_value=mock_session_context_manager) as mock_get_session_cm_object, \
-         patch('app.bot.main.get_user_by_telegram_id', return_value=None) as mock_get_user:
-        # mock_get_session_cm_object.__next__.return_value = mock_session_context_manager # Для next(get_session())
-        # Переделываем мок get_session для with next(get_session())
+    with patch('app.bot.main.get_session') as mock_get_session_cm_object, \
+            patch('app.bot.main.get_user_by_telegram_id', return_value=None) as mock_get_user, \
+            patch('app.bot.main.log_user_action') as mock_log_action:  # Мокируем log_user_action
         mock_generator = MagicMock()
+        mock_session_context_manager = MagicMock()  # Определяем здесь
+        mock_session_context_manager.__enter__.return_value = session_sub
         mock_generator.__next__.return_value = mock_session_context_manager
         mock_get_session_cm_object.return_value = mock_generator
 
-
         await process_mysubscriptions_command(mock_message)
+
+        # Проверяем, что get_user_by_telegram_id был вызван (один раз из самого хендлера)
         mock_get_user.assert_called_once_with(session=session_sub, telegram_id=777)
-        mock_message.answer.assert_called_once_with("Не удалось найти информацию о вас. Пожалуйста, выполните /start.")
+        # Проверяем, что log_user_action тоже был вызван
+        mock_log_action.assert_called_once()
+        mock_message.answer.assert_called_once_with("Не удалось найти информацию о вас...")
 
 @pytest.mark.asyncio
 async def test_process_mysubscriptions_command_no_subscriptions_sub(db_user_sub, session_sub):
@@ -83,10 +87,7 @@ async def test_process_mysubscriptions_command_no_subscriptions_sub(db_user_sub,
 
         await process_mysubscriptions_command(mock_message)
         mock_get_subs.assert_called_once_with(session=session_sub, user_id=db_user_sub.id)
-        mock_message.answer.assert_called_once_with(
-            "У вас пока нет активных подписок.\n"
-            "Вы можете подписаться с помощью команды /subscribe."
-        )
+        mock_message.answer.assert_called_once_with("У вас пока нет активных подписок...")
 
 @pytest.mark.asyncio
 async def test_process_mysubscriptions_command_with_subscriptions_sub(db_user_sub, session_sub):
@@ -106,12 +107,12 @@ async def test_process_mysubscriptions_command_with_subscriptions_sub(db_user_su
         mock_get_session_cm_object.return_value = mock_generator
 
         await process_mysubscriptions_command(mock_message)
-        mock_get_user_subs_patched.assert_called_once_with(session=session_sub, user_id=db_user_sub.id)
+        mock_get_user_subs_patched.assert_called_once_with(session=mock_session_context_manager.__enter__.return_value, user_id=db_user_sub.id)
         expected_lines = [
             "<b>📋 Ваши активные подписки:</b>",
-            "1. Новости (Россия) (Частота: daily)",
-            f"2. Погода для города: <b>{html.escape(sub2.details)}</b> (Частота: daily)",
-            f"3. События в городе: <b>{html.escape('Москва')}</b> (Частота: daily)"
+            f"1. Новости (Россия) ({html.escape(sub1.frequency or 'ежедн.')})",
+            f"2. Погода для города: <b>{html.escape(sub2.details)}</b> ({html.escape(sub2.frequency or 'ежедн.')})",
+            f"3. События в городе: <b>{html.escape('Москва')}</b> ({html.escape(sub3.frequency or 'ежедн.')})"
         ]
         expected_text = "\n".join(expected_lines)
         mock_message.answer.assert_called_once_with(expected_text)

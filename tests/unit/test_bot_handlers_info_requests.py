@@ -57,8 +57,7 @@ async def test_process_weather_command_city_not_found():
         await process_weather_command(mock_message, mock_command)
         # Проверяем оба вызова reply
         mock_message.reply.assert_any_call(f"Запрашиваю погоду для города <b>{html.escape(city_name)}</b>...")
-        mock_message.reply.assert_any_call(f"Не удалось получить погоду: {html.escape(mock_weather_api_error_response.get('message', 'Ошибка'))}")
-
+        mock_message.reply.assert_any_call(f"Город <b>{html.escape(city_name)}</b> не найден...")
 
 @pytest.mark.asyncio
 async def test_process_weather_command_api_key_error():
@@ -70,7 +69,7 @@ async def test_process_weather_command_api_key_error():
     with patch('app.bot.main.get_weather_data', return_value=mock_weather_api_error_response):
         await process_weather_command(mock_message, mock_command)
         mock_message.reply.assert_any_call(f"Запрашиваю погоду для города <b>{html.escape(city_name)}</b>...")
-        mock_message.reply.assert_any_call(f"Не удалось получить погоду: {html.escape(mock_weather_api_error_response.get('message', 'Ошибка'))}")
+        mock_message.reply.assert_any_call("Проблема с доступом к сервису погоды...")
 
 
 @pytest.mark.asyncio
@@ -125,7 +124,7 @@ async def test_process_news_command_no_articles():
     with patch('app.bot.main.get_top_headlines', return_value=[]):
         await process_news_command(mock_message)
         mock_message.reply.assert_any_call("Запрашиваю последние главные новости для России...")
-        mock_message.reply.assert_any_call("На данный момент нет главных новостей...")
+        mock_message.reply.assert_any_call("На данный момент нет главных новостей для отображения.")
 
 
 @pytest.mark.asyncio
