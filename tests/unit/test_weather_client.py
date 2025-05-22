@@ -61,11 +61,12 @@ async def test_get_weather_data_no_api_key():
     mock_settings.WEATHER_API_KEY = "" # Пустой API ключ
 
     with patch('app.api_clients.weather.settings', mock_settings), \
-         patch('app.api_clients.weather.logger.error') as mock_logger_error: # Патчим логгер
+         patch('app.api_clients.weather.logger.error') as mock_logger_error:
         result = await get_weather_data(city_name)
 
         assert result is None
-        mock_logger_error.assert_called_once_with("WEATHER_API_KEY не установлен в настройках.")
+        # Ожидаем точный текст лога из app/api_clients/weather.py
+        mock_logger_error.assert_called_once_with("WEATHER_API_KEY не установлен в настройках. Невозможно получить данные о погоде.")
 
 
 @pytest.mark.asyncio
@@ -120,23 +121,22 @@ async def test_get_weather_data_request_error():
     mock_settings = MagicMock(spec=Settings)
     mock_settings.WEATHER_API_KEY = api_key
 
-    # Настраиваем get, чтобы он вызывал RequestError
     network_error = httpx.RequestError("Network error occurred", request=MagicMock())
 
     with patch('app.api_clients.weather.settings', mock_settings), \
          patch('httpx.AsyncClient') as MockAsyncClient, \
          patch('app.api_clients.weather.logger.error') as mock_logger_error:
 
-        mock_async_client_instance = AsyncMock()
-        # Мокируем get, чтобы он вызывал ошибку
-        mock_async_client_instance.get.side_effect = network_error
-        MockAsyncClient.return_value.__aenter__.return_value = mock_async_client_instance
+            mock_async_client_instance = AsyncMock()
+            mock_async_client_instance.get.side_effect = network_error
+            MockAsyncClient.return_value.__aenter__.return_value = mock_async_client_instance
 
-        result = await get_weather_data(city_name)
+            result = await get_weather_data(city_name)
 
-        expected_error_result = {"error": True, "message": "Сетевая ошибка при запросе к сервису погоды."}
-        assert result == expected_error_result
-        mock_logger_error.assert_called_once_with(f"Ошибка сети при запросе погоды для города '{city_name}': {network_error}")
+            expected_error_result = {"error": True, "message": "Сетевая ошибка при запросе к сервису погоды."}
+            assert result == expected_error_result
+            # Проверяем, что logger.error был вызван с exc_info=True
+            mock_logger_error.assert_called_once_with(f"Ошибка сети при запросе погоды для города '{city_name}': {network_error}", exc_info=True)
 
 
 @pytest.mark.asyncio
