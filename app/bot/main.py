@@ -1,124 +1,294 @@
-import logging
-import asyncio
-import html
-from typing import Optional # Убедимся, что импортирован
+"""
+Главный модуль Telegram-бота InfoPalBot.
+Отвечает за инициализацию бота, диспетчера, обработку команд и сообщений от пользователей,
+управление состояниями (FSM) для многошаговых операций (например, подписка),
+а также запуск и остановку фоновых задач планировщика.
 
+Основные компоненты:
+1. Инициализация бота и диспетчера
+2. Определение состояний FSM для многошаговых операций
+3. Обработчики команд и сообщений
+4. Функции для работы с базой данных
+5. Функции для взаимодействия с внешними API
+6. Функции для логирования действий пользователей
+
+Пример использования:
+    # Запуск бота
+    asyncio.run(main())
+
+    # Обработка команды /start
+    @dp.message(Command("start"))
+    async def process_start_command(message: types.Message):
+        await message.answer("Привет!")
+"""
+
+import logging  # Для логирования событий и ошибок
+import asyncio  # Для асинхронного программирования (используется aiogram и httpx)
+import html  # Для экранирования HTML-сущностей в сообщениях
+from typing import Optional, Dict, List, Union, Any  # Для аннотаций типов
+
+# Компоненты Aiogram для создания бота и обработки событий
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-from aiogram.filters import Command, CommandObject, StateFilter
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
-from sqlmodel import Session # Для type hinting в log_user_action
+from aiogram.client.default import (
+    DefaultBotProperties,
+)  # Для настроек бота по умолчанию
+from aiogram.enums import ParseMode  # Для указания режима разметки сообщений
+from aiogram.filters import (
+    Command,
+    CommandObject,
+    StateFilter,
+)  # Фильтры для обработчиков
+from aiogram.fsm.context import FSMContext  # Для управления состояниями диалога
+from aiogram.fsm.state import State, StatesGroup  # Для определения групп состояний FSM
+from aiogram.types import (
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    ReplyKeyboardRemove,
+)  # Для создания клавиатур
 
-from app.config import settings
-from app.database.session import get_session, create_db_and_tables
-from app.database.crud import (
+# Компоненты SQLModel для работы с БД
+from sqlmodel import Session  # Для type hinting сессии БД
+
+# Внутренние импорты проекта
+from app.config import settings  # Настройки приложения (токены, URL БД и т.д.)
+from app.database.session import (
+    get_session,
+    create_db_and_tables,
+)  # Управление сессиями и создание таблиц
+from app.database.crud import (  # Функции для работы с базой данных (CRUD)
     create_user_if_not_exists,
     get_user_by_telegram_id,
     create_subscription,
     get_subscriptions_by_user_id,
     get_subscription_by_user_and_type,
     delete_subscription,
-    create_log_entry
+    create_log_entry,
 )
-from app.database.models import User, Subscription
-from app.api_clients.weather import get_weather_data
-from app.api_clients.news import get_top_headlines
-from app.api_clients.events import get_kudago_events
-from .constants import INFO_TYPE_WEATHER, INFO_TYPE_NEWS, INFO_TYPE_EVENTS, KUDAGO_LOCATION_SLUGS
-# Импорты для планировщика должны быть в `if __name__ == '__main__'` или использоваться по месту
-# from app.scheduler.main import schedule_jobs, shutdown_scheduler, set_bot_instance, scheduler as aps_scheduler
+from app.database.models import User, Subscription  # Модели таблиц БД
+from app.api_clients.weather import get_weather_data  # Клиент для API погоды
+from app.api_clients.news import get_top_headlines  # Клиент для API новостей
+from app.api_clients.events import get_kudago_events  # Клиент для API событий
+from .constants import (
+    INFO_TYPE_WEATHER,
+    INFO_TYPE_NEWS,
+    INFO_TYPE_EVENTS,
+    KUDAGO_LOCATION_SLUGS,
+)  # Общие константы
 
-# Настройка логирования
-logging.basicConfig(level=settings.LOG_LEVEL, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Настройка стандартного логирования Python
+# Уровень логирования (INFO, DEBUG и т.д.) берется из настроек приложения.
+# Формат лога включает время, имя логгера, уровень и сообщение.
+logging.basicConfig(
+    level=settings.LOG_LEVEL.upper(),  # Убедимся, что уровень в верхнем регистре
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+# Получаем экземпляр логгера для текущего модуля
 logger = logging.getLogger(__name__)
 
-# Инициализация бота и диспетчера
-default_properties = DefaultBotProperties(parse_mode=ParseMode.HTML)
-bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, default=default_properties)
+# Настройки по умолчанию для отправки сообщений ботом (например, всегда использовать HTML разметку)
+default_bot_properties = DefaultBotProperties(parse_mode=ParseMode.HTML)
+# Инициализация объекта бота с токеном из настроек и свойствами по умолчанию
+bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, default=default_bot_properties)
+# Инициализация диспетчера для обработки входящих обновлений
 dp = Dispatcher()
 
-# KUDAGO_LOCATION_SLUGS уже импортируется из .constants
 
-# Определяем состояния FSM для подписки
+# KUDAGO_LOCATION_SLUGS импортируется из .constants, здесь определение не нужно.
+# Если бы он не был в constants, то здесь:
+# KUDAGO_LOCATION_SLUGS: Dict[str, str] = { ... }
+
+
+# Определяем состояния (FSM) для процесса подписки
 class SubscriptionStates(StatesGroup):
-    choosing_info_type = State()
-    entering_city_weather = State()
-    entering_city_events = State()
+    """
+    Состояния для конечного автомата (FSM) управления процессом подписки пользователя.
+    
+    Состояния используются для управления многошаговым процессом подписки:
+    1. choosing_info_type: Пользователь выбирает тип информации (погода, новости, события)
+    2. entering_city_weather: Пользователь вводит город для подписки на погоду
+    3. entering_city_events: Пользователь вводит город для подписки на события
+    
+    Note:
+        - Состояния используются в обработчиках команд и сообщений
+        - Переход между состояниями происходит через FSMContext
+        - Состояния очищаются после завершения процесса или отмены
+    """
 
-# Вспомогательная функция для логирования действия пользователя
-def log_user_action(db_session: Session, telegram_id: int, command: str, details: Optional[str] = None):
-    """Логирует действие пользователя в базу данных."""
+    choosing_info_type = State()  # Пользователь выбирает тип информации (погода, новости, события)
+    entering_city_weather = State()  # Пользователь вводит город для подписки на погоду
+    entering_city_events = State()  # Пользователь вводит город для подписки на события
+    # choosing_frequency = State()  # Потенциальное состояние для выбора частоты рассылки
+
+
+def log_user_action(
+    db_session: Session, telegram_id: int, command: str, details: Optional[str] = None
+):
+    """
+    Вспомогательная функция для создания записи в логе базы данных о действии пользователя.
+    
+    Функция:
+    1. Находит пользователя в БД по его Telegram ID
+    2. Создает запись в логе с информацией о действии
+    3. Обрабатывает возможные ошибки без прерывания основного потока
+    
+    Args:
+        db_session (Session): Активная сессия базы данных SQLModel.
+        telegram_id (int): Telegram ID пользователя, совершившего действие.
+        command (str): Строковое представление команды или типа действия
+                      (например, "/start", "subscribe_weather").
+        details (Optional[str]): Дополнительные детали действия
+                                (например, аргументы команды, результат).
+                                По умолчанию None.
+    
+    Note:
+        - Если пользователь не найден в БД, запись в лог все равно создается
+        - Ошибки при записи в лог логируются, но не прерывают основное действие
+        - Функция используется во всех обработчиках команд для аудита действий
+    """
+    # Пытаемся найти пользователя в БД по его Telegram ID, чтобы связать лог с внутренним user_id
     user = get_user_by_telegram_id(session=db_session, telegram_id=telegram_id)
-    user_db_id = user.id if user else None
+    user_db_id: Optional[int] = user.id if user else None  # Если пользователь найден, используем его ID, иначе None
+
     try:
-        create_log_entry(session=db_session, user_id=user_db_id, command=command, details=details)
+        # Создаем запись в логе
+        create_log_entry(
+            session=db_session, user_id=user_db_id, command=command, details=details
+        )
     except Exception as e:
-        logger.error(f"Failed to create log entry for user {telegram_id}, command {command}: {e}", exc_info=True)
+        # Если произошла ошибка при записи в лог, логируем ее в консоль/файл, но не прерываем основное действие
+        logger.error(
+            f"Не удалось создать запись в логе для пользователя {telegram_id}, команда {command}: {e}",
+            exc_info=True,
+        )
 
-# --- Обработчики команд ---
 
-@dp.message(Command('cancel'), StateFilter('*'))
+# Этот код является продолжением Части 1 файла app/bot/main.py
+
+# ... (код до log_user_action включительно, как в Части 1) ...
+
+# --- ОБРАБОТЧИКИ ОСНОВНЫХ КОМАНД ---
+
+
+@dp.message(Command("cancel"), StateFilter("*"))
 async def cmd_cancel_any_state(message: types.Message, state: FSMContext):
-    """Отменяет любое активное состояние FSM."""
-    telegram_id = message.from_user.id
-    current_state_str = await state.get_state()
-    log_details = f"State before cancel: {current_state_str}"
+    """
+    Обрабатывает команду /cancel в любом состоянии FSM (или без состояния).
+    
+    Функция:
+    1. Отменяет текущее многошаговое действие пользователя
+    2. Очищает состояние FSM
+    3. Удаляет клавиатуру
+    4. Логирует действие в БД
+    
+    Args:
+        message (types.Message): Объект сообщения от пользователя.
+        state (FSMContext): Контекст конечного автомата для управления состояниями.
+    
+    Note:
+        - Команда работает в любом состоянии FSM
+        - Если состояние отсутствует, пользователь получает соответствующее сообщение
+        - После отмены все состояния очищаются
+    """
+    telegram_id: int = message.from_user.id
+    current_state_str: Optional[str] = await state.get_state()
+    log_details: str = f"State before cancel: {current_state_str}"
 
-    with next(get_session()) as db_session:
+    # Логируем попытку отмены
+    with get_session() as db_session:
         log_user_action(db_session, telegram_id, "/cancel", log_details)
 
     if current_state_str is None:
-        await message.answer("Нет активного действия для отмены.", reply_markup=ReplyKeyboardRemove())
+        # Если пользователь не находится ни в каком состоянии, сообщаем, что отменять нечего
+        await message.answer(
+            "Нет активного действия для отмены.", reply_markup=ReplyKeyboardRemove()
+        )
         return
 
-    logger.info(f"Пользователь {telegram_id} отменил действие командой /cancel из состояния {current_state_str}.")
-    await state.clear()
+    logger.info(
+        f"Пользователь {telegram_id} отменил действие командой /cancel из состояния {current_state_str}."
+    )
+    await state.clear()  # Очищаем состояние FSM
     await message.answer("Действие отменено.", reply_markup=ReplyKeyboardRemove())
 
 
-@dp.message(Command('start'), StateFilter('*')) # /start должен сбрасывать любое состояние
+@dp.message(Command("start"), StateFilter("*"))
 async def process_start_command(message: types.Message, state: FSMContext):
     """
     Обрабатывает команду /start.
-    Приветствует пользователя, регистрирует (если новый) и сбрасывает состояние FSM.
+    
+    Функция:
+    1. Приветствует пользователя
+    2. Регистрирует его в системе (если новый)
+    3. Сбрасывает любое активное состояние FSM
+    4. Логирует действие в БД
+    
+    Args:
+        message (types.Message): Объект сообщения от пользователя.
+        state (FSMContext): Контекст конечного автомата для управления состояниями.
+    
+    Note:
+        - Команда работает в любом состоянии FSM
+        - Приветственное сообщение включает имя пользователя
+        - Новые пользователи автоматически регистрируются в БД
+        - Все активные состояния очищаются при старте
     """
-    telegram_id = message.from_user.id
-    logger.info(f"Команда /start вызвана пользователем {telegram_id}. Текущее состояние: {await state.get_state()}")
-    await state.clear()
+    telegram_id: int = message.from_user.id
+    logger.info(
+        f"Команда /start вызвана пользователем {telegram_id}. Текущее состояние: {await state.get_state()}"
+    )
+    await state.clear()  # Важно сбрасывать состояние при /start
 
-    db_user_internal_id: Optional[int] = None
+    db_user_internal_id: Optional[int] = None  # Для логирования ошибки, если пользователь еще не создан
+    log_command: str = "/start"
+    log_details: Optional[str] = "User started/restarted the bot"
+
     try:
-        with next(get_session()) as db_session:
-            db_user = create_user_if_not_exists(session=db_session, telegram_id=telegram_id)
+        with get_session() as db_session:
+            # Получаем или создаем пользователя в БД
+            db_user = create_user_if_not_exists(
+                session=db_session, telegram_id=telegram_id
+            )
             db_user_internal_id = db_user.id
-            logger.info(f"Обработана команда /start от пользователя {telegram_id}. Пользователь в БД: {db_user_internal_id}")
-            log_user_action(db_session, telegram_id, "/start", "User started/restarted the bot")
+            logger.info(
+                f"Обработана команда /start от пользователя {telegram_id}. Пользователь в БД: {db_user_internal_id}"
+            )
+            # Логируем успешное выполнение команды
+            log_user_action(db_session, telegram_id, log_command, log_details)
 
         await message.answer(
             f"Привет, {message.from_user.full_name}! Я InfoPalBot. Я могу предоставить тебе актуальную информацию.\n"
             f"Используй /help, чтобы увидеть список доступных команд."
         )
     except Exception as e:
-        logger.error(f"Ошибка при обработке команды /start для пользователя {telegram_id}: {e}", exc_info=True)
-        log_details_error = f"User ID {db_user_internal_id if db_user_internal_id else 'unknown'}, error: {str(e)[:150]}"
-        try: # Вложенный try для гарантии логирования даже если основная сессия упала
+        logger.error(
+            f"Ошибка при обработке команды /start для пользователя {telegram_id}: {e}",
+            exc_info=True,
+        )
+        # Формируем детали для лога ошибки
+        error_log_details = f"User ID {db_user_internal_id if db_user_internal_id else 'unknown'}, error: {str(e)[:150]}"
+        try:  # Отдельная попытка залогировать критическую ошибку
             with get_session() as db_session_err:
-                log_user_action(db_session_err, telegram_id, "/start_error", log_details_error)
+                log_user_action(
+                    db_session_err,
+                    telegram_id,
+                    f"{log_command}_error",
+                    error_log_details,
+                )
         except Exception as log_e:
-            logger.error(f"Не удалось залогировать ошибку /start: {log_e}")
-        await message.answer("Произошла ошибка при обработке вашего запроса. Попробуйте позже.")
+            logger.error(f"Не удалось залогировать ошибку {log_command}: {log_e}")
+        await message.answer(
+            "Произошла ошибка при обработке вашего запроса. Попробуйте позже."
+        )
 
 
-@dp.message(Command('help'))
+@dp.message(Command("help"))
 async def process_help_command(message: types.Message):
     """
-    Обрабатывает команду /help. Отправляет пользователю список доступных команд.
+    Обрабатывает команду /help.
+    Отправляет пользователю справочное сообщение со списком доступных команд.
     """
-    telegram_id = message.from_user.id
-    help_text = (
+    telegram_id: int = message.from_user.id
+    help_text: str = (
         "<b>Доступные команды:</b>\n"
         "<code>/start</code> - Начать работу с ботом и зарегистрироваться\n"
         "<code>/help</code> - Показать это сообщение со справкой\n"
@@ -132,495 +302,901 @@ async def process_help_command(message: types.Message):
     )
     await message.answer(help_text)
     logger.info(f"Отправлена справка по команде /help пользователю {telegram_id}")
+    # Логируем действие
     with next(get_session()) as db_session:
         log_user_action(db_session, telegram_id, "/help")
 
 
-# Этот код является продолжением Части 1 файла app/bot/main.py
-
-# ... (код до process_help_command включительно, как в Части 1) ...
-
-@dp.message(Command('weather'))
+@dp.message(Command("weather"))
 async def process_weather_command(message: types.Message, command: CommandObject):
     """
-    Обрабатывает команду /weather. Запрашивает и отображает погоду для указанного города.
-    Логирует запрос и результат.
+    Обрабатывает команду /weather [город].
+    Запрашивает и отображает погоду для указанного города, логирует запрос и результат.
     """
-    city_name_arg = command.args
-    telegram_id = message.from_user.id
-    log_command = "/weather"
-    log_details = ""  # Будет заполнено по ходу выполнения
+    city_name_arg: Optional[str] = (
+        command.args
+    )  # Аргументы команды (все, что после /weather)
+    telegram_id: int = message.from_user.id
+    log_command: str = "/weather"
+    log_details: str = "N/A"  # Будет перезаписано
 
     try:
         with next(get_session()) as db_session:
             if not city_name_arg:
+                # Если город не указан, отправляем инструкцию
                 await message.reply("Пожалуйста, укажите название города...")
-                logger.info(f"Команда /weather вызвана без указания города пользователем {telegram_id}.")
+                logger.info(
+                    f"Команда /weather вызвана без указания города пользователем {telegram_id}."
+                )
                 log_details = "Город не указан"
                 log_user_action(db_session, telegram_id, log_command, log_details)
                 return
 
-            city_name_clean = city_name_arg.strip()
-            log_details = f"город: {city_name_clean}"
-            logger.info(f"Пользователь {telegram_id} запросил погоду для города: {city_name_clean}")
-            await message.reply(f"Запрашиваю погоду для города <b>{html.escape(city_name_clean)}</b>...")
+            city_name_clean: str = city_name_arg.strip()
+            log_details = f"город: {city_name_clean}"  # Основная деталь для лога
+            logger.info(
+                f"Пользователь {telegram_id} запросил погоду для города: {city_name_clean}"
+            )
+            await message.reply(
+                f"Запрашиваю погоду для города <b>{html.escape(city_name_clean)}</b>..."
+            )
 
-            weather_data = await get_weather_data(city_name_clean)
+            # Получаем данные о погоде
+            weather_data: Optional[Dict[str, Any]] = await get_weather_data(
+                city_name_clean
+            )
+            log_status_suffix: str = (
+                ""  # Добавка к деталям лога в зависимости от результата
+            )
 
             if weather_data and not weather_data.get("error"):
                 try:
-                    description = weather_data['weather'][0]['description'].capitalize()
-                    temp = weather_data['main']['temp']
-                    feels_like = weather_data['main']['feels_like']
-                    humidity = weather_data['main']['humidity']
-                    wind_speed = weather_data['wind']['speed']
-                    wind_deg = weather_data['wind'].get('deg')
-                    wind_direction_str = ""
+                    # Извлекаем и форматируем данные для ответа
+                    description: str = weather_data["weather"][0][
+                        "description"
+                    ].capitalize()
+                    temp: float = weather_data["main"]["temp"]
+                    feels_like: float = weather_data["main"]["feels_like"]
+                    humidity: int = weather_data["main"]["humidity"]
+                    wind_speed: float = weather_data["wind"]["speed"]
+                    wind_deg: Optional[int] = weather_data["wind"].get("deg")
+                    wind_direction_str: str = ""
                     if wind_deg is not None:
-                        directions = ["Северный", "С-В", "Восточный", "Ю-В", "Южный", "Ю-З", "Западный", "С-З"]
-                        wind_direction_str = f", {directions[int((wind_deg % 360) / 45)]}"
-                    response_text = (
+                        directions = [
+                            "Северный",
+                            "С-В",
+                            "Восточный",
+                            "Ю-В",
+                            "Южный",
+                            "Ю-З",
+                            "Западный",
+                            "С-З",
+                        ]
+                        wind_direction_str = (
+                            f", {directions[int((wind_deg % 360) / 45)]}"
+                        )
+
+                    response_text: str = (
                         f"<b>Погода в городе {html.escape(weather_data.get('name', city_name_clean))}:</b>\n"
-                        f"🌡️ Температура: {temp}°C (ощущается как {feels_like}°C)\n💧 Влажность: {humidity}%\n"
-                        f"💨 Ветер: {wind_speed} м/с{wind_direction_str}\n☀️ Описание: {description}"
+                        f"🌡️ Температура: {temp}°C (ощущается как {feels_like}°C)\n"
+                        f"💧 Влажность: {humidity}%\n"
+                        f"💨 Ветер: {wind_speed} м/с{wind_direction_str}\n"
+                        f"☀️ Описание: {description}"
                     )
                     await message.answer(response_text)
-                    log_details += ", успех"
+                    log_status_suffix = ", успех"
                 except KeyError as e:
                     logger.error(
                         f"Ошибка парсинга данных о погоде для {city_name_clean}: ключ {e}. Данные: {weather_data}",
-                        exc_info=True)
+                        exc_info=True,
+                    )
                     await message.answer("Не удалось обработать данные о погоде...")
-                    log_details += f", ошибка парсинга: {str(e)[:50]}"
-                except Exception as e:
-                    logger.error(f"Непредвиденная ошибка при формировании ответа о погоде для {city_name_clean}: {e}",
-                                 exc_info=True)
+                    log_status_suffix = f", ошибка парсинга: {str(e)[:50]}"
+                except Exception as e:  # Любая другая ошибка при формировании ответа
+                    logger.error(
+                        f"Непредвиденная ошибка при формировании ответа о погоде для {city_name_clean}: {e}",
+                        exc_info=True,
+                    )
                     await message.answer("Произошла ошибка при отображении погоды.")
-                    log_details += f", ошибка отображения: {str(e)[:50]}"
+                    log_status_suffix = f", ошибка отображения: {str(e)[:50]}"
 
-            elif weather_data and weather_data.get("error"):
-                error_message_text = weather_data.get("message", "Неизвестная ошибка API.")
-                status_code = weather_data.get("status_code")
+            elif weather_data and weather_data.get("error"):  # Ошибка от API клиента
+                error_message_text: str = weather_data.get(
+                    "message", "Неизвестная ошибка API."
+                )
+                status_code: Optional[int] = weather_data.get("status_code")
                 if status_code == 404:
-                    await message.reply(f"Город <b>{html.escape(city_name_clean)}</b> не найден...")
-                elif status_code == 401:
+                    await message.reply(
+                        f"Город <b>{html.escape(city_name_clean)}</b> не найден..."
+                    )
+                elif status_code == 401:  # Ошибка авторизации (API ключ)
                     await message.reply("Проблема с доступом к сервису погоды...")
-                    logger.critical("API ключ OpenWeatherMap недействителен!")
+                    logger.critical(
+                        "API ключ OpenWeatherMap недействителен или неверно настроен!"
+                    )
                 else:
-                    await message.reply(f"Не удалось получить погоду: {html.escape(error_message_text)}")
-                logger.warning(f"Ошибка API погоды для {city_name_clean} (user {telegram_id}): {error_message_text}")
-                log_details += f", ошибка API: {error_message_text[:50]}"
-            else:
+                    await message.reply(
+                        f"Не удалось получить погоду: {html.escape(error_message_text)}"
+                    )
+                logger.warning(
+                    f"Ошибка API погоды для {city_name_clean} (user {telegram_id}): {error_message_text}"
+                )
+                log_status_suffix = f", ошибка API: {error_message_text[:50]}"
+            else:  # get_weather_data вернул None или пустой словарь без "error"
                 await message.reply("Не удалось получить данные о погоде...")
                 logger.error(
-                    f"get_weather_data вернул None/неожиданный ответ для {city_name_clean} (user {telegram_id}).")
-                log_details += ", нет данных от API"
+                    f"get_weather_data вернул None или неожиданный ответ для {city_name_clean} (user {telegram_id})."
+                )
+                log_status_suffix = ", нет данных от API"
 
-            log_user_action(db_session, telegram_id, log_command, log_details)
+            # Финальное логирование действия
+            log_user_action(
+                db_session, telegram_id, log_command, log_details + log_status_suffix
+            )
 
-    except Exception as e:
-        logger.error(f"Критическая ошибка в process_weather_command для {telegram_id}, город {city_name_arg}: {e}",
-                     exc_info=True)
-        await message.answer("Произошла внутренняя ошибка сервера...")
-        try:  # Отдельная попытка залогировать критическую ошибку
+    except Exception as e:  # Глобальный обработчик ошибок для всей команды
+        logger.error(
+            f"Критическая ошибка в process_weather_command для {telegram_id}, город '{city_name_arg}': {e}",
+            exc_info=True,
+        )
+        await message.answer(
+            "Произошла внутренняя ошибка сервера. Пожалуйста, попробуйте позже."
+        )
+        try:  # Попытка залогировать критическую ошибку
             with get_session() as db_session_err:
-                log_user_action(db_session_err, telegram_id, f"{log_command}_critical_error", str(e)[:250])
+                log_user_action(
+                    db_session_err,
+                    telegram_id,
+                    f"{log_command}_critical_error",
+                    str(e)[:250],
+                )
         except Exception as log_e:
-            logger.error(f"Не удалось залогировать критическую ошибку {log_command}: {log_e}")
+            logger.error(
+                f"Не удалось залогировать критическую ошибку {log_command}: {log_e}"
+            )
 
 
-@dp.message(Command('news'))
+@dp.message(Command("news"))
 async def process_news_command(message: types.Message):
     """
     Обрабатывает команду /news. Запрашивает и отображает главные новости для России.
     Логирует запрос и результат.
     """
-    telegram_id = message.from_user.id
+    telegram_id: int = message.from_user.id
     logger.info(f"Пользователь {telegram_id} запросил новости.")
     await message.reply("Запрашиваю последние главные новости для России...")
 
-    log_command = "/news"
-    log_status_details = "unknown_error"
+    log_command: str = "/news"
+    log_status_details: str = "unknown_error"  # Статус выполнения для лога
     try:
         with next(get_session()) as db_session:
-            articles_or_error = await get_top_headlines(country="ru", page_size=5)
+            # Получаем новости через API клиент
+            articles_or_error: Optional[List[Dict[str, Any]]] | Dict[str, Any] = (
+                await get_top_headlines(country="ru", page_size=5)
+            )
 
             if isinstance(articles_or_error, list) and articles_or_error:
-                response_lines = ["<b>📰 Последние главные новости (Россия):</b>"]
+                # Успешно получены статьи
+                response_lines: List[str] = [
+                    "<b>📰 Последние главные новости (Россия):</b>"
+                ]
                 for i, article in enumerate(articles_or_error):
-                    title = html.escape(article.get('title', 'Без заголовка'));
-                    url = article.get('url', '#')
-                    source = html.escape(article.get('source', {}).get('name', 'Неизвестный источник'))
-                    response_lines.append(f"{i + 1}. <a href='{url}'>{title}</a> ({source})")
-                await message.answer("\n".join(response_lines), disable_web_page_preview=True)
+                    title: str = html.escape(article.get("title", "Без заголовка"))
+                    url: str = article.get("url", "#")
+                    source: str = html.escape(
+                        article.get("source", {}).get("name", "Неизвестный источник")
+                    )
+                    response_lines.append(
+                        f"{i + 1}. <a href='{url}'>{title}</a> ({source})"
+                    )
+                await message.answer(
+                    "\n".join(response_lines), disable_web_page_preview=True
+                )
                 logger.info(f"Успешно отправлены новости пользователю {telegram_id}.")
                 log_status_details = "success"
             elif isinstance(articles_or_error, list) and not articles_or_error:
-                await message.reply("На данный момент нет главных новостей для отображения.")
-                logger.info(f"Главных новостей для России не найдено (пользователь {telegram_id}).")
+                # API вернул пустой список (нет новостей)
+                await message.reply(
+                    "На данный момент нет главных новостей для отображения."
+                )
+                logger.info(
+                    f"Главных новостей для России не найдено (пользователь {telegram_id})."
+                )
                 log_status_details = "no_articles_found"
             elif isinstance(articles_or_error, dict) and articles_or_error.get("error"):
-                error_message_text = articles_or_error.get("message", "Неизвестная ошибка API.")
-                await message.reply(f"Не удалось получить новости: {html.escape(error_message_text)}")
-                logger.warning(f"Ошибка API новостей (user {telegram_id}): {error_message_text}")
+                # API клиент вернул словарь с ошибкой
+                error_message_text: str = articles_or_error.get(
+                    "message", "Неизвестная ошибка API."
+                )
+                await message.reply(
+                    f"Не удалось получить новости: {html.escape(error_message_text)}"
+                )
+                logger.warning(
+                    f"Ошибка API новостей (user {telegram_id}): {error_message_text}"
+                )
                 log_status_details = f"api_error: {error_message_text[:100]}"
-            else:
+            else:  # Неожиданный формат ответа от API клиента
                 await message.reply("Не удалось получить данные о новостях...")
                 logger.error(
-                    f"get_top_headlines вернул неожиданный ответ для России (user {telegram_id}): {articles_or_error}")
+                    f"get_top_headlines вернул неожиданный ответ для России (user {telegram_id}): {articles_or_error}"
+                )
                 log_status_details = "unexpected_api_response"
 
+            # Логируем действие
             log_user_action(db_session, telegram_id, log_command, log_status_details)
 
-    except Exception as e:
-        logger.error(f"Критическая ошибка в process_news_command для {telegram_id}: {e}", exc_info=True)
+    except Exception as e:  # Глобальный обработчик ошибок
+        logger.error(
+            f"Критическая ошибка в process_news_command для {telegram_id}: {e}",
+            exc_info=True,
+        )
         await message.answer("Произошла внутренняя ошибка сервера...")
-        try:
+        try:  # Попытка залогировать критическую ошибку
             with get_session() as db_session_err:
-                log_user_action(db_session_err, telegram_id, f"{log_command}_critical_error", str(e)[:250])
+                log_user_action(
+                    db_session_err,
+                    telegram_id,
+                    f"{log_command}_critical_error",
+                    str(e)[:250],
+                )
         except Exception as log_e:
-            logger.error(f"Не удалось залогировать критическую ошибку {log_command}: {log_e}")
+            logger.error(
+                f"Не удалось залогировать критическую ошибку {log_command}: {log_e}"
+            )
 
 
+# ... (продолжение в Части 3) ...
 # Этот код является продолжением Части 2 файла app/bot/main.py
 
 # ... (код до process_news_command включительно, как в Части 2) ...
 
-@dp.message(Command('events'))
+
+@dp.message(Command("events"))
 async def process_events_command(message: types.Message, command: CommandObject):
     """
-    Обрабатывает команду /events. Запрашивает и отображает события KudaGo для указанного города.
+    Обрабатывает команду /events [город].
+    Запрашивает и отображает актуальные события KudaGo для указанного города.
     Логирует запрос и результат.
     """
-    city_arg = command.args
-    telegram_id = message.from_user.id
+    city_arg: Optional[str] = command.args
+    telegram_id: int = message.from_user.id
     log_command: str = "/events"
     log_details: str = "N/A"  # Значение по умолчанию
 
     try:
         with next(get_session()) as db_session:
             if not city_arg:
-                await message.reply("Пожалуйста, укажите город...\nДоступные города: Москва, Санкт-Петербург...")
-                logger.info(f"Команда /events вызвана без указания города пользователем {telegram_id}.")
+                await message.reply(
+                    "Пожалуйста, укажите город...\nДоступные города: Москва, Санкт-Петербург..."
+                )
+                logger.info(
+                    f"Команда /events вызвана без указания города пользователем {telegram_id}."
+                )
                 log_details = "Город не указан"
                 log_user_action(db_session, telegram_id, log_command, log_details)
                 return
 
-            city_arg_clean = city_arg.strip()
-            city_name_lower = city_arg_clean.lower()
-            location_slug = KUDAGO_LOCATION_SLUGS.get(city_name_lower)
+            city_arg_clean: str = city_arg.strip()
+            city_name_lower: str = city_arg_clean.lower()
+            location_slug: Optional[str] = KUDAGO_LOCATION_SLUGS.get(city_name_lower)
             log_details = f"город: {city_arg_clean}"
 
             if not location_slug:
                 await message.reply(
-                    f"К сожалению, не знаю событий для города '{html.escape(city_arg_clean)}'...\nПопробуйте: Москва, Санкт-Петербург...")
+                    f"К сожалению, не знаю событий для города '{html.escape(city_arg_clean)}'...\nПопробуйте: Москва, Санкт-Петербург..."
+                )
                 logger.info(
-                    f"Пользователь {telegram_id} запросил события для неподдерживаемого города: {city_arg_clean}")
+                    f"Пользователь {telegram_id} запросил события для неподдерживаемого города: {city_arg_clean}"
+                )
                 log_details += ", город не поддерживается"
                 log_user_action(db_session, telegram_id, log_command, log_details)
                 return
 
             logger.info(
-                f"Пользователь {telegram_id} запросил события KudaGo для города: {city_arg_clean} (slug: {location_slug})")
-            await message.reply(f"Запрашиваю актуальные события для города <b>{html.escape(city_arg_clean)}</b>...")
+                f"Пользователь {telegram_id} запросил события KudaGo для города: {city_arg_clean} (slug: {location_slug})"
+            )
+            await message.reply(
+                f"Запрашиваю актуальные события для города <b>{html.escape(city_arg_clean)}</b>..."
+            )
 
-            events_result = await get_kudago_events(location=location_slug, page_size=5)
+            events_result: Optional[List[Dict[str, Any]]] | Dict[str, Any] = (
+                await get_kudago_events(location=location_slug, page_size=5)
+            )
             log_status_suffix: str = ""
 
             if isinstance(events_result, list) and events_result:
-                response_lines = [f"<b>🎉 Актуальные события в городе {html.escape(city_arg_clean.capitalize())}:</b>"]
-                for i, event in enumerate(events_result):
-                    title = html.escape(event.get('title', 'Без заголовка'));
-                    site_url = event.get('site_url', '#')
-                    description_raw = event.get('description', '');
-                    description = html.unescape(
-                        description_raw.replace('<p>', '').replace('</p>', '').replace('<br>', '\n')).strip()
-                    event_str = f"{i + 1}. <a href='{site_url}'>{title}</a>"
+                response_lines: List[str] = [
+                    f"<b>🎉 Актуальные события в городе {html.escape(city_arg_clean.capitalize())}:</b>"
+                ]
+                for i, event_data in enumerate(events_result):
+                    title: str = html.escape(event_data.get("title", "Без заголовка"))
+                    site_url: str = event_data.get("site_url", "#")
+                    description_raw: str = event_data.get("description", "")
+                    description: str = html.unescape(
+                        description_raw.replace("<p>", "")
+                        .replace("</p>", "")
+                        .replace("<br>", "\n")
+                    ).strip()
+
+                    event_str: str = f"{i + 1}. <a href='{site_url}'>{title}</a>"
                     if description:
                         max_desc_len = 100
-                        if len(description) > max_desc_len: description = description[:max_desc_len] + "..."
+                        if len(description) > max_desc_len:
+                            description = description[:max_desc_len] + "..."
                         event_str += f"\n   <i>{html.escape(description)}</i>"
                     response_lines.append(event_str)
-                await message.answer("\n\n".join(response_lines), disable_web_page_preview=True)
-                logger.info(f"Успешно отправлены события KudaGo для {location_slug} пользователю {telegram_id}.")
+                await message.answer(
+                    "\n\n".join(response_lines), disable_web_page_preview=True
+                )
+                logger.info(
+                    f"Успешно отправлены события KudaGo для {location_slug} пользователю {telegram_id}."
+                )
                 log_status_suffix = ", успех"
             elif isinstance(events_result, list) and not events_result:
-                await message.reply(f"Не найдено актуальных событий для города <b>{html.escape(city_arg_clean)}</b>.")
-                logger.info(f"Актуальных событий KudaGo для {location_slug} не найдено (пользователь {telegram_id}).")
+                await message.reply(
+                    f"Не найдено актуальных событий для города <b>{html.escape(city_arg_clean)}</b>."
+                )
+                logger.info(
+                    f"Актуальных событий KudaGo для {location_slug} не найдено (пользователь {telegram_id})."
+                )
                 log_status_suffix = ", не найдено"
             elif isinstance(events_result, dict) and events_result.get("error"):
-                error_message_text = events_result.get("message", "Неизвестная ошибка API.")
-                await message.reply(f"Не удалось получить события: {html.escape(error_message_text)}")
+                error_message_text: str = events_result.get(
+                    "message", "Неизвестная ошибка API."
+                )
+                await message.reply(
+                    f"Не удалось получить события: {html.escape(error_message_text)}"
+                )
                 logger.warning(
-                    f"Ошибка API событий KudaGo для {location_slug} (user {telegram_id}): {error_message_text}")
+                    f"Ошибка API событий KudaGo для {location_slug} (user {telegram_id}): {error_message_text}"
+                )
                 log_status_suffix = f", ошибка API: {error_message_text[:70]}"
             else:
                 await message.reply("Не удалось получить данные о событиях...")
                 logger.error(
-                    f"get_kudago_events вернул неожиданный ответ для {location_slug} (user {telegram_id}): {events_result}")
+                    f"get_kudago_events вернул неожиданный ответ для {location_slug} (user {telegram_id}): {events_result}"
+                )
                 log_status_suffix = ", unexpected_api_response"
 
-            log_user_action(db_session, telegram_id, log_command, log_details + log_status_suffix)
+            log_user_action(
+                db_session, telegram_id, log_command, log_details + log_status_suffix
+            )
 
-    except Exception as e:
-        logger.error(f"Критическая ошибка в process_events_command для {telegram_id}, город {city_arg}: {e}",
-                     exc_info=True)
+    except Exception as e:  # Глобальный обработчик ошибок
+        logger.error(
+            f"Критическая ошибка в process_events_command для {telegram_id}, город '{city_arg}': {e}",
+            exc_info=True,
+        )
         await message.answer("Произошла внутренняя ошибка сервера...")
-        try:  # Отдельная попытка залогировать критическую ошибку
+        try:  # Попытка залогировать критическую ошибку
             with get_session() as db_session_err:
-                log_user_action(db_session_err, telegram_id, f"{log_command}_critical_error", str(e)[:250])
+                log_user_action(
+                    db_session_err,
+                    telegram_id,
+                    f"{log_command}_critical_error",
+                    str(e)[:250],
+                )
         except Exception as log_e:
-            logger.error(f"Не удалось залогировать критическую ошибку {log_command}: {log_e}")
+            logger.error(
+                f"Не удалось залогировать критическую ошибку {log_command}: {log_e}"
+            )
 
 
-# --- Обработчики для /subscribe и FSM ---
+# --- ОБРАБОТЧИКИ ДЛЯ ПОДПИСОК (FSM) ---
 
-@dp.message(Command('subscribe'), StateFilter(None))
+
+@dp.message(
+    Command("subscribe"), StateFilter(None)
+)  # Срабатывает только если нет активного состояния
 async def process_subscribe_command_start(message: types.Message, state: FSMContext):
-    telegram_id = message.from_user.id
+    """
+    Начинает процесс подписки пользователя. Предлагает выбрать тип информации.
+    Устанавливает начальное состояние FSM.
+    """
+    telegram_id: int = message.from_user.id
     with next(get_session()) as db_session:
-        log_user_action(db_session, telegram_id, "/subscribe", "Start subscription process")
-    logger.info(f"Пользователь {telegram_id} начал процесс подписки командой /subscribe.")
+        log_user_action(
+            db_session, telegram_id, "/subscribe", "Start subscription process"
+        )
+    logger.info(
+        f"Пользователь {telegram_id} начал процесс подписки командой /subscribe."
+    )
+
     keyboard_buttons = [
-        [InlineKeyboardButton(text="🌦️ Погода", callback_data=f"subscribe_type:{INFO_TYPE_WEATHER}")],
-        [InlineKeyboardButton(text="📰 Новости (Россия)", callback_data=f"subscribe_type:{INFO_TYPE_NEWS}")],
-        [InlineKeyboardButton(text="🎉 События", callback_data=f"subscribe_type:{INFO_TYPE_EVENTS}")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="subscribe_fsm_cancel")]
+        [
+            InlineKeyboardButton(
+                text="🌦️ Погода", callback_data=f"subscribe_type:{INFO_TYPE_WEATHER}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="📰 Новости (Россия)",
+                callback_data=f"subscribe_type:{INFO_TYPE_NEWS}",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="🎉 События", callback_data=f"subscribe_type:{INFO_TYPE_EVENTS}"
+            )
+        ],
+        [
+            InlineKeyboardButton(text="❌ Отмена", callback_data="subscribe_fsm_cancel")
+        ],  # Кнопка отмены FSM
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
-    await message.answer("На какой тип информации вы хотите подписаться?", reply_markup=keyboard)
-    await state.set_state(SubscriptionStates.choosing_info_type)
+    await message.answer(
+        "На какой тип информации вы хотите подписаться?", reply_markup=keyboard
+    )
+    await state.set_state(
+        SubscriptionStates.choosing_info_type
+    )  # Переход в состояние выбора типа
 
 
-@dp.callback_query(StateFilter(SubscriptionStates.choosing_info_type), F.data.startswith("subscribe_type:"))
-async def process_info_type_choice(callback_query: types.CallbackQuery, state: FSMContext):
-    await callback_query.answer()
-    selected_type = callback_query.data.split(":")[1];
-    telegram_id = callback_query.from_user.id
-    log_details = f"Type chosen: {selected_type}"
+@dp.callback_query(
+    StateFilter(SubscriptionStates.choosing_info_type),
+    F.data.startswith("subscribe_type:"),
+)
+async def process_info_type_choice(
+    callback_query: types.CallbackQuery, state: FSMContext
+):
+    """
+    Обрабатывает выбор типа информации пользователем в процессе подписки.
+    Переводит в следующее состояние FSM (ввод города) или завершает подписку (для новостей).
+    """
+    await callback_query.answer()  # Отвечаем на callback, чтобы убрать "часики"
+    selected_type: str = callback_query.data.split(":")[1]
+    telegram_id: int = callback_query.from_user.id
+    log_details: str = f"Type chosen: {selected_type}"
 
-    with next(get_session()) as db_session:  # Сессия для логирования и возможных операций с БД
+    await state.update_data(info_type=selected_type)  # Сохраняем выбранный тип в FSM
+
+    with next(get_session()) as db_session:
         log_user_action(db_session, telegram_id, "subscribe_type_selected", log_details)
-        await state.update_data(info_type=selected_type)
 
         if selected_type == INFO_TYPE_WEATHER:
-            await callback_query.message.edit_text("Вы выбрали 'Погода'.\nПожалуйста, введите название города...")
+            await callback_query.message.edit_text(
+                "Вы выбрали 'Погода'.\nПожалуйста, введите название города..."
+            )
             await state.set_state(SubscriptionStates.entering_city_weather)
         elif selected_type == INFO_TYPE_EVENTS:
             await callback_query.message.edit_text(
-                "Вы выбрали 'События'.\nПожалуйста, введите название города (например, Москва, спб).")
+                "Вы выбрали 'События'.\nПожалуйста, введите название города (например, Москва, спб)."
+            )
             await state.set_state(SubscriptionStates.entering_city_events)
-        elif selected_type == INFO_TYPE_NEWS:
-            frequency = "daily"  # Частота по умолчанию
-            db_user = create_user_if_not_exists(db_session, telegram_id)  # Используем ту же сессию
-            existing_subscription = get_subscription_by_user_and_type(db_session, db_user.id, INFO_TYPE_NEWS)
+        elif (
+            selected_type == INFO_TYPE_NEWS
+        ):  # Для новостей (пока только Россия) город не нужен
+            frequency: str = "daily"  # Частота по умолчанию
+            db_user = create_user_if_not_exists(db_session, telegram_id)
+            existing_subscription = get_subscription_by_user_and_type(
+                db_session, db_user.id, INFO_TYPE_NEWS
+            )
             if existing_subscription:
-                await callback_query.message.edit_text("Вы уже подписаны на 'Новости (Россия)'.")
-                log_user_action(db_session, telegram_id, "subscribe_attempt_duplicate", f"Type: {INFO_TYPE_NEWS}")
+                await callback_query.message.edit_text(
+                    "Вы уже подписаны на 'Новости (Россия)'."
+                )
+                log_user_action(
+                    db_session,
+                    telegram_id,
+                    "subscribe_attempt_duplicate",
+                    f"Type: {INFO_TYPE_NEWS}",
+                )
             else:
                 create_subscription(db_session, db_user.id, INFO_TYPE_NEWS, frequency)
-                log_user_action(db_session, telegram_id, "subscribe_confirm",
-                                f"Type: {INFO_TYPE_NEWS}, Freq: {frequency}")
+                log_user_action(
+                    db_session,
+                    telegram_id,
+                    "subscribe_confirm",
+                    f"Type: {INFO_TYPE_NEWS}, Freq: {frequency}",
+                )
                 await callback_query.message.edit_text(
-                    f"Вы успешно подписались на 'Новости (Россия)' с частотой '{frequency}'.")
-            await state.clear()
-        else:
-            log_user_action(db_session, telegram_id, "subscribe_error_type", f"Unknown type: {selected_type}")
-            await callback_query.message.edit_text("Произошла ошибка выбора типа. Пожалуйста, попробуйте снова.")
+                    f"Вы успешно подписались на 'Новости (Россия)' с частотой '{frequency}'."
+                )
+            await state.clear()  # Завершаем FSM для новостей
+        else:  # Неожиданный тип информации
+            log_user_action(
+                db_session,
+                telegram_id,
+                "subscribe_error_type",
+                f"Unknown type: {selected_type}",
+            )
+            await callback_query.message.edit_text(
+                "Произошла ошибка выбора типа. Пожалуйста, попробуйте снова."
+            )
             await state.clear()
 
 
-@dp.callback_query(StateFilter(SubscriptionStates.choosing_info_type), F.data == "subscribe_fsm_cancel")
-async def callback_fsm_cancel_process(callback_query: types.CallbackQuery, state: FSMContext):
-    telegram_id = callback_query.from_user.id
+@dp.callback_query(
+    StateFilter(SubscriptionStates.choosing_info_type), F.data == "subscribe_fsm_cancel"
+)
+async def callback_fsm_cancel_process(
+    callback_query: types.CallbackQuery, state: FSMContext
+):
+    """
+    Обрабатывает нажатие кнопки "Отмена" в диалоге выбора типа подписки.
+    """
+    telegram_id: int = callback_query.from_user.id
     with next(get_session()) as db_session:
-        log_user_action(db_session, telegram_id, "subscribe_fsm_cancel", "Cancelled type choice by button")
-    logger.info(f"Пользователь {telegram_id} отменил процесс подписки кнопкой 'Отмена'.")
-    await callback_query.answer();
-    await callback_query.message.edit_text("Процесс подписки отменен.");
+        log_user_action(
+            db_session,
+            telegram_id,
+            "subscribe_fsm_cancel",
+            "Cancelled type choice by button",
+        )
+    logger.info(
+        f"Пользователь {telegram_id} отменил процесс подписки кнопкой 'Отмена'."
+    )
+    await callback_query.answer()
+    await callback_query.message.edit_text("Процесс подписки отменен.")
     await state.clear()
 
 
 @dp.message(StateFilter(SubscriptionStates.entering_city_weather), F.text)
-async def process_city_for_weather_subscription(message: types.Message, state: FSMContext):
-    city_name = message.text.strip();
-    telegram_id = message.from_user.id
-    user_data = await state.get_data();
-    info_type = user_data.get("info_type", "weather")  # По умолчанию weather для этого состояния
-    log_details = f"Input for {info_type}: {city_name}"
+async def process_city_for_weather_subscription(
+    message: types.Message, state: FSMContext
+):
+    """
+    Обрабатывает ввод города пользователем для подписки на погоду.
+    Проверяет на дубликат и создает подписку.
+    """
+    city_name: str = message.text.strip()
+    telegram_id: int = message.from_user.id
+    user_data: Dict[str, Any] = await state.get_data()
+    info_type: str = user_data.get(
+        "info_type", INFO_TYPE_WEATHER
+    )  # Получаем тип из состояния
+    log_details: str = f"Type: {info_type}, City input: {city_name}"
 
     with next(get_session()) as db_session:
-        if not city_name:
+        if not city_name:  # Проверка на пустое сообщение
             await message.reply("Название города не может быть пустым...")
-            log_user_action(db_session, telegram_id, "subscribe_city_empty", f"Type: {info_type}")
-            return  # Остаемся в состоянии
+            log_user_action(
+                db_session, telegram_id, "subscribe_city_empty", f"Type: {info_type}"
+            )
+            return  # Остаемся в текущем состоянии, ожидая корректного ввода
 
-        logger.info(f"Пользователь {telegram_id} ввел город '{city_name}' для подписки на '{info_type}'.")
-        frequency = "daily"
+        logger.info(
+            f"Пользователь {telegram_id} ввел город '{city_name}' для подписки на '{info_type}'."
+        )
+        frequency: str = "daily"  # Частота по умолчанию
         db_user = create_user_if_not_exists(db_session, telegram_id)
-        existing_subscription = get_subscription_by_user_and_type(db_session, db_user.id, info_type, city_name)
+        existing_subscription = get_subscription_by_user_and_type(
+            db_session, db_user.id, info_type, city_name
+        )
+
         if existing_subscription:
-            await message.answer(f"Вы уже подписаны на '{info_type}' для города '{html.escape(city_name)}'.")
-            log_user_action(db_session, telegram_id, "subscribe_attempt_duplicate",
-                            f"Type: {info_type}, City: {city_name}")
+            await message.answer(
+                f"Вы уже подписаны на '{info_type}' для города '{html.escape(city_name)}'."
+            )
+            log_user_action(
+                db_session, telegram_id, "subscribe_attempt_duplicate", log_details
+            )
         else:
             create_subscription(db_session, db_user.id, info_type, frequency, city_name)
-            log_user_action(db_session, telegram_id, "subscribe_confirm",
-                            f"Type: {info_type}, City: {city_name}, Freq: {frequency}")
+            log_user_action(
+                db_session,
+                telegram_id,
+                "subscribe_confirm",
+                f"Type: {info_type}, City: {city_name}, Freq: {frequency}",
+            )
             await message.answer(
-                f"Вы успешно подписались на '{info_type}' для города '{html.escape(city_name)}' с частотой '{frequency}'.")
-        await state.clear()
+                f"Вы успешно подписались на '{info_type}' для города '{html.escape(city_name)}' с частотой '{frequency}'."
+            )
+        await state.clear()  # Завершаем FSM
 
 
 @dp.message(StateFilter(SubscriptionStates.entering_city_events), F.text)
-async def process_city_for_events_subscription(message: types.Message, state: FSMContext):
-    city_arg = message.text.strip();
-    telegram_id = message.from_user.id
-    user_data = await state.get_data();
-    info_type = user_data.get("info_type", "events")  # По умолчанию events
-    log_details = f"Input for {info_type}: {city_arg}"
+async def process_city_for_events_subscription(
+    message: types.Message, state: FSMContext
+):
+    """
+    Обрабатывает ввод города пользователем для подписки на события.
+    Проверяет поддержку города, наличие дубликата и создает подписку.
+    """
+    city_arg: str = message.text.strip()
+    telegram_id: int = message.from_user.id
+    user_data: Dict[str, Any] = await state.get_data()
+    info_type: str = user_data.get(
+        "info_type", INFO_TYPE_EVENTS
+    )  # Получаем тип из состояния
+    log_details: str = f"Type: {info_type}, City input: {city_arg}"
 
     with next(get_session()) as db_session:
         if not city_arg:
             await message.reply("Название города не может быть пустым...")
-            log_user_action(db_session, telegram_id, "subscribe_city_empty", f"Type: {info_type}")
+            log_user_action(
+                db_session, telegram_id, "subscribe_city_empty", f"Type: {info_type}"
+            )
             return
 
-        location_slug = KUDAGO_LOCATION_SLUGS.get(city_arg.lower())
+        location_slug: Optional[str] = KUDAGO_LOCATION_SLUGS.get(city_arg.lower())
         if not location_slug:
             await message.reply(
-                f"К сожалению, не знаю событий для города '{html.escape(city_arg)}'...\nПопробуйте: Москва, Санкт-Петербург...")
-            log_user_action(db_session, telegram_id, "subscribe_city_unsupported", log_details)
-            return
+                f"К сожалению, не знаю событий для города '{html.escape(city_arg)}'...\nПопробуйте: Москва, Санкт-Петербург..."
+            )
+            log_user_action(
+                db_session, telegram_id, "subscribe_city_unsupported", log_details
+            )
+            return  # Остаемся в состоянии для повторного ввода или отмены
 
         log_details += f", slug: {location_slug}"
         logger.info(
-            f"Пользователь {telegram_id} ввел город '{city_arg}' (slug: {location_slug}) для подписки на '{info_type}'.")
-        frequency = "daily"
+            f"Пользователь {telegram_id} ввел город '{city_arg}' (slug: {location_slug}) для подписки на '{info_type}'."
+        )
+        frequency: str = "daily"  # Частота по умолчанию
         db_user = create_user_if_not_exists(db_session, telegram_id)
-        existing_subscription = get_subscription_by_user_and_type(db_session, db_user.id, info_type, location_slug)
+        existing_subscription = get_subscription_by_user_and_type(
+            db_session, db_user.id, info_type, location_slug
+        )
+
         if existing_subscription:
-            await message.answer(f"Вы уже подписаны на '{info_type}' для города '{html.escape(city_arg)}'.")
-            log_user_action(db_session, telegram_id, "subscribe_attempt_duplicate", log_details)
-        else:
-            create_subscription(db_session, db_user.id, info_type, frequency, location_slug)
-            log_user_action(db_session, telegram_id, "subscribe_confirm",
-                            f"Type: {info_type}, City: {city_arg} (slug: {location_slug}), Freq: {frequency}")
             await message.answer(
-                f"Вы успешно подписались на '{info_type}' для города '{html.escape(city_arg)}' с частотой '{frequency}'.")
-        await state.clear()
+                f"Вы уже подписаны на '{info_type}' для города '{html.escape(city_arg)}'."
+            )
+            log_user_action(
+                db_session, telegram_id, "subscribe_attempt_duplicate", log_details
+            )
+        else:
+            create_subscription(
+                db_session, db_user.id, info_type, frequency, location_slug
+            )
+            log_user_action(
+                db_session,
+                telegram_id,
+                "subscribe_confirm",
+                f"Type: {info_type}, City: {city_arg} (slug: {location_slug}), Freq: {frequency}",
+            )
+            await message.answer(
+                f"Вы успешно подписались на '{info_type}' для города '{html.escape(city_arg)}' с частотой '{frequency}'."
+            )
+        await state.clear()  # Завершаем FSM
 
 
-# --- Команды управления подписками ---
-@dp.message(Command('mysubscriptions'))
+# --- КОМАНДЫ УПРАВЛЕНИЯ ПОДПИСКАМИ ---
+
+
+@dp.message(Command("mysubscriptions"))
 async def process_mysubscriptions_command(message: types.Message):
-    telegram_id = message.from_user.id
+    """
+    Обрабатывает команду /mysubscriptions.
+    Отображает пользователю список его активных подписок.
+    """
+    telegram_id: int = message.from_user.id
+    log_command: str = "/mysubscriptions"
+    log_details: Optional[str] = (
+        None  # По умолчанию нет деталей, если нет ошибок/особых случаев
+    )
+
     with next(get_session()) as db_session:
-        log_user_action(db_session, telegram_id, "/mysubscriptions")
         db_user = get_user_by_telegram_id(session=db_session, telegram_id=telegram_id)
-        if not db_user: await message.answer("Не удалось найти информацию о вас..."); return
-        subscriptions = get_subscriptions_by_user_id(session=db_session, user_id=db_user.id)
-        if not subscriptions: await message.answer("У вас пока нет активных подписок..."); return
-        response_lines = ["<b>📋 Ваши активные подписки:</b>"]
+        if not db_user:
+            await message.answer("Не удалось найти информацию о вас...")
+            log_details = "User not found"
+            log_user_action(db_session, telegram_id, log_command, log_details)
+            return
+
+        subscriptions: List[Subscription] = get_subscriptions_by_user_id(
+            session=db_session, user_id=db_user.id
+        )
+        if not subscriptions:
+            await message.answer("У вас пока нет активных подписок...")
+            log_details = "No active subscriptions"
+            log_user_action(db_session, telegram_id, log_command, log_details)
+            return
+
+        response_lines: List[str] = ["<b>📋 Ваши активные подписки:</b>"]
         for i, sub in enumerate(subscriptions):
-            sub_details_str = "";
-            freq_str = html.escape(sub.frequency or 'ежедн.')
+            sub_details_str: str = ""
+            freq_str: str = html.escape(
+                sub.frequency or "ежедн."
+            )  # Частота по умолчанию
             if sub.info_type == INFO_TYPE_WEATHER:
                 sub_details_str = f"Погода для города: <b>{html.escape(sub.details or 'Не указан')}</b>"
             elif sub.info_type == INFO_TYPE_NEWS:
                 sub_details_str = "Новости (Россия)"
             elif sub.info_type == INFO_TYPE_EVENTS:
-                city_display_name = sub.details
+                city_display_name: str = (
+                    sub.details or "Не указан"
+                )  # slug или "Не указан"
                 for name, slug_val in KUDAGO_LOCATION_SLUGS.items():
-                    if slug_val == sub.details: city_display_name = name.capitalize(); break
-                sub_details_str = f"События в городе: <b>{html.escape(city_display_name)}</b>"
-            else:
+                    if slug_val == sub.details:
+                        city_display_name = name.capitalize()
+                        break
+                sub_details_str = (
+                    f"События в городе: <b>{html.escape(city_display_name)}</b>"
+                )
+            else:  # Общий случай для неизвестных типов подписок
                 sub_details_str = f"Тип: {html.escape(sub.info_type)}"
+                if sub.details:
+                    sub_details_str += f", Детали: {html.escape(sub.details)}"
             response_lines.append(f"{i + 1}. {sub_details_str} ({freq_str})")
+
         await message.answer("\n".join(response_lines))
+        log_details = f"Displayed {len(subscriptions)} subscriptions"
+        log_user_action(db_session, telegram_id, log_command, log_details)
 
 
-@dp.message(Command('unsubscribe'))
-async def process_unsubscribe_command_start(message: types.Message, state: FSMContext):
-    telegram_id = message.from_user.id
+@dp.message(Command("unsubscribe"))
+async def process_unsubscribe_command_start(
+    message: types.Message, state: FSMContext
+):  # state для единообразия, здесь не используется
+    """
+    Начинает процесс отписки. Отображает активные подписки пользователя с кнопками для отмены.
+    """
+    telegram_id: int = message.from_user.id
+    log_details: str = "Start unsubscribe process"
+
     with next(get_session()) as db_session:
-        log_user_action(db_session, telegram_id, "/unsubscribe", "Start unsubscribe process")
+        log_user_action(db_session, telegram_id, "/unsubscribe", log_details)
         db_user = get_user_by_telegram_id(session=db_session, telegram_id=telegram_id)
-        if not db_user: await message.answer("Не удалось найти информацию о вас..."); return
-        subscriptions = get_subscriptions_by_user_id(session=db_session, user_id=db_user.id)
-        if not subscriptions: await message.answer("У вас нет активных подписок для отмены."); return
-        keyboard_buttons = []
+        if not db_user:
+            await message.answer("Не удалось найти информацию о вас...")
+            # Дополнительное логирование не требуется, т.к. log_user_action уже записал /unsubscribe
+            return
+
+        subscriptions: List[Subscription] = get_subscriptions_by_user_id(
+            session=db_session, user_id=db_user.id
+        )
+        if not subscriptions:
+            await message.answer("У вас нет активных подписок для отмены.")
+            log_user_action(
+                db_session,
+                telegram_id,
+                "/unsubscribe",
+                "No active subscriptions to display",
+            )  # Уточняем лог
+            return
+
+        keyboard_buttons: List[List[InlineKeyboardButton]] = []
         for sub in subscriptions:
-            sub_details_str = "";
-            freq_str = html.escape(sub.frequency or 'ежедн.')
+            sub_details_str: str = ""
+            freq_str: str = html.escape(sub.frequency or "ежедн.")
             if sub.info_type == INFO_TYPE_WEATHER:
                 sub_details_str = f"Погода: {html.escape(sub.details or 'Город?')}"
             elif sub.info_type == INFO_TYPE_NEWS:
                 sub_details_str = "Новости (Россия)"
             elif sub.info_type == INFO_TYPE_EVENTS:
-                city_display_name = sub.details
+                city_display_name = sub.details or "Не указан"
                 for name, slug_val in KUDAGO_LOCATION_SLUGS.items():
-                    if slug_val == sub.details: city_display_name = name.capitalize(); break
+                    if slug_val == sub.details:
+                        city_display_name = name.capitalize()
+                        break
                 sub_details_str = f"События: {html.escape(city_display_name)}"
             else:
                 sub_details_str = f"{html.escape(sub.info_type)}"
-            keyboard_buttons.append([InlineKeyboardButton(text=f"❌ {sub_details_str} ({freq_str})",
-                                                          callback_data=f"unsubscribe_confirm:{sub.id}")])
+            keyboard_buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"❌ {sub_details_str} ({freq_str})",
+                        callback_data=f"unsubscribe_confirm:{sub.id}",
+                    )
+                ]
+            )
+
         keyboard_buttons.append(
-            [InlineKeyboardButton(text="Отменить операцию", callback_data="unsubscribe_action_cancel")])
-        await message.answer("Выберите подписку, от которой хотите отписаться:",
-                             reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_buttons))
+            [
+                InlineKeyboardButton(
+                    text="Отменить операцию", callback_data="unsubscribe_action_cancel"
+                )
+            ]
+        )
+        await message.answer(
+            "Выберите подписку, от которой хотите отписаться:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_buttons),
+        )
+        # Логируем, что пользователю показан список
+        log_user_action(
+            db_session,
+            telegram_id,
+            "/unsubscribe",
+            f"Displaying {len(subscriptions)} subscriptions for cancellation",
+        )
 
 
 @dp.callback_query(F.data.startswith("unsubscribe_confirm:"))
-async def process_unsubscribe_confirm(callback_query: types.CallbackQuery, state: FSMContext):
-    await callback_query.answer()
-    subscription_id_to_delete = int(callback_query.data.split(":")[1]);
-    telegram_id = callback_query.from_user.id
-    log_details = f"Subscription ID to delete: {subscription_id_to_delete}"
+async def process_unsubscribe_confirm(
+    callback_query: types.CallbackQuery, state: FSMContext
+):  # state для единообразия
+    """
+    Обрабатывает подтверждение отписки (нажатие на кнопку с подпиской).
+    Деактивирует выбранную подписку.
+    """
+    await callback_query.answer()  # Снимаем "часики" с кнопки
+    subscription_id_to_delete: int = int(callback_query.data.split(":")[1])
+    telegram_id: int = callback_query.from_user.id
+    log_details: str = f"Subscription ID to delete: {subscription_id_to_delete}"
+
     with next(get_session()) as db_session:
         db_user = get_user_by_telegram_id(session=db_session, telegram_id=telegram_id)
         if not db_user:
             await callback_query.message.edit_text("Ошибка: пользователь не найден.")
-            log_user_action(db_session, telegram_id, "unsubscribe_error", f"{log_details}, user_not_found")
+            log_user_action(
+                db_session,
+                telegram_id,
+                "unsubscribe_error",
+                f"{log_details}, user_not_found",
+            )
             return
-        subscription_to_check = db_session.get(Subscription, subscription_id_to_delete)
+
+        subscription_to_check: Optional[Subscription] = db_session.get(
+            Subscription, subscription_id_to_delete
+        )
         if not subscription_to_check or subscription_to_check.user_id != db_user.id:
-            await callback_query.message.edit_text("Ошибка: это не ваша подписка или она не найдена.")
-            log_user_action(db_session, telegram_id, "unsubscribe_error", f"{log_details}, sub_not_found_or_not_owner")
+            await callback_query.message.edit_text(
+                "Ошибка: это не ваша подписка или она не найдена."
+            )
+            log_user_action(
+                db_session,
+                telegram_id,
+                "unsubscribe_error",
+                f"{log_details}, sub_not_found_or_not_owner",
+            )
             return
-        success = delete_subscription(session=db_session, subscription_id=subscription_id_to_delete)
+
+        success: bool = delete_subscription(
+            session=db_session, subscription_id=subscription_id_to_delete
+        )
         if success:
             await callback_query.message.edit_text("Вы успешно отписались.")
-            log_user_action(db_session, telegram_id, "unsubscribe_confirm_success", log_details)
-        else:
+            log_user_action(
+                db_session, telegram_id, "unsubscribe_confirm_success", log_details
+            )
+        else:  # Этот случай маловероятен, если проверки выше прошли
             await callback_query.message.edit_text("Не удалось отписаться...")
-            log_user_action(db_session, telegram_id, "unsubscribe_confirm_fail", log_details)
+            log_user_action(
+                db_session, telegram_id, "unsubscribe_confirm_fail", log_details
+            )
 
 
 @dp.callback_query(F.data == "unsubscribe_action_cancel")
-async def process_unsubscribe_action_cancel(callback_query: types.CallbackQuery, state: FSMContext):
+async def process_unsubscribe_action_cancel(
+    callback_query: types.CallbackQuery, state: FSMContext
+):  # state для единообразия
+    """
+    Обрабатывает нажатие кнопки "Отменить операцию" в диалоге отписки.
+    """
+    telegram_id: int = callback_query.from_user.id
     with next(get_session()) as db_session:
-        log_user_action(db_session, callback_query.from_user.id, "unsubscribe_action_cancel")
-    await callback_query.answer();
+        log_user_action(db_session, telegram_id, "unsubscribe_action_cancel")
+    await callback_query.answer()
     await callback_query.message.edit_text("Операция отписки отменена.")
 
 
-# --- Функции жизненного цикла бота ---
+# --- ФУНКЦИИ ЖИЗНЕННОГО ЦИКЛА БОТА И ПЛАНИРОВЩИКА ---
 async def on_startup():
+    """
+    Выполняется при запуске бота.
+    Создает таблицы БД, настраивает команды меню и запускает планировщик.
+    """
     logger.info("Бот запускается...")
-    create_db_and_tables()
-    from app.scheduler.main import set_bot_instance, schedule_jobs, scheduler as aps_scheduler  # Импорт здесь
-    set_bot_instance(bot)
-    schedule_jobs()
+    create_db_and_tables()  # Создаем таблицы, если их нет
+
+    # Импортируем здесь, чтобы избежать циклических зависимостей на уровне модуля,
+    # если этот файл импортируется где-то еще до полной инициализации scheduler.main
+    from app.scheduler.main import (
+        set_bot_instance,
+        schedule_jobs,
+        scheduler as aps_scheduler,
+    )
+
+    set_bot_instance(bot)  # Передаем экземпляр бота в модуль планировщика
+    schedule_jobs()  # Добавляем задачи в планировщик
+
+    # Запускаем планировщик, если он еще не запущен
     if not aps_scheduler.running:
         try:
             aps_scheduler.start()
             logger.info("Планировщик APScheduler успешно запущен из on_startup.")
         except Exception as e:
-            logger.error(f"Ошибка при запуске планировщика из on_startup: {e}", exc_info=True)
+            logger.error(
+                f"Ошибка при запуске планировщика из on_startup: {e}", exc_info=True
+            )
     else:
-        logger.info("Планировщик APScheduler уже был запущен.")
+        logger.info(
+            "Планировщик APScheduler уже был запущен (возможно, при предыдущем запуске on_startup)."
+        )
+
+    # Установка команд меню бота
     commands_to_set = [
         types.BotCommand(command="start", description="🚀 Запуск и регистрация"),
         types.BotCommand(command="help", description="❓ Помощь по командам"),
@@ -629,27 +1205,40 @@ async def on_startup():
         types.BotCommand(command="events", description="🎉 События (город)"),
         types.BotCommand(command="subscribe", description="🔔 Подписаться на рассылку"),
         types.BotCommand(command="mysubscriptions", description="📜 Мои подписки"),
-        types.BotCommand(command="unsubscribe", description="🔕 Отписаться от рассылки"),
+        types.BotCommand(
+            command="unsubscribe", description="🔕 Отписаться от рассылки"
+        ),
         types.BotCommand(command="cancel", description="❌ Отменить текущее действие"),
     ]
     try:
         await bot.set_my_commands(commands_to_set)
         logger.info("Команды бота успешно установлены в меню Telegram.")
     except Exception as e:
-        logger.error(f"Ошибка при установке команд бота: {e}")
+        logger.error(f"Ошибка при установке команд бота: {e}", exc_info=True)
     logger.info("Бот успешно запущен!")
 
 
-async def on_shutdown():  # Эта функция вызывается из dp.shutdown.register(on_shutdown)
+async def on_shutdown_local():  # Переименовал, чтобы не конфликтовать с импортируемым shutdown_scheduler
+    """
+    Выполняется при остановке бота (локальные действия).
+    """
     logger.info("Бот останавливается (локальный on_shutdown)...")
+    # Здесь можно добавить специфичные для бота действия при остановке, если они нужны,
+    # кроме остановки планировщика, которая обрабатывается отдельно.
     logger.info("Бот остановлен (локальный on_shutdown).")
 
 
-if __name__ == '__main__':
-    from app.scheduler.main import shutdown_scheduler  # Импортируем только shutdown_scheduler здесь
+# Главная точка входа для запуска бота
+if __name__ == "__main__":
+    # Импортируем shutdown_scheduler здесь, чтобы он был доступен для регистрации
+    from app.scheduler.main import shutdown_scheduler
 
+    # Регистрируем обработчики жизненного цикла
     dp.startup.register(on_startup)
-    dp.shutdown.register(shutdown_scheduler)  # Регистрируем shutdown_scheduler из модуля scheduler.main
-    dp.shutdown.register(on_shutdown)  # Регистрируем локальный on_shutdown тоже
+    dp.shutdown.register(
+        shutdown_scheduler
+    )  # Остановка планировщика при выключении бота
+    dp.shutdown.register(on_shutdown_local)  # Локальные действия при выключении бота
 
+    # Запускаем поллинг бота
     asyncio.run(dp.start_polling(bot, skip_updates=True))

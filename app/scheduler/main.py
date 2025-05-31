@@ -1,10 +1,40 @@
 """
 Модуль для инициализации и управления планировщиком задач APScheduler.
 Отвечает за запуск, остановку и добавление запланированных задач.
+
+Этот модуль обеспечивает централизованное управление всеми запланированными задачами бота,
+используя APScheduler для асинхронного выполнения задач. Модуль поддерживает:
+
+- Инициализацию и конфигурацию планировщика
+- Добавление и управление задачами рассылки
+- Корректное завершение работы планировщика
+- Интеграцию с экземпляром бота для отправки сообщений
+
+Основные компоненты:
+- AsyncIOScheduler: асинхронный планировщик для работы с asyncio
+- Глобальный экземпляр бота для задач рассылки
+- Функции управления жизненным циклом планировщика
+
+Запланированные задачи:
+1. Тестовая задача (каждые 30 секунд)
+2. Рассылка погоды (каждые 3 часа)
+3. Рассылка новостей (каждые 6 часов)
+4. Рассылка событий (каждые 2 минуты в тестовом режиме)
+
+Пример использования:
+    # В on_startup бота:
+    set_bot_instance(bot)
+    schedule_jobs()
+    scheduler.start()
+
+    # В on_shutdown бота:
+    shutdown_scheduler()
 """
 
 import logging
-from apscheduler.schedulers.asyncio import AsyncIOScheduler  # Асинхронный планировщик для asyncio
+from apscheduler.schedulers.asyncio import (
+    AsyncIOScheduler,
+)  # Асинхронный планировщик для asyncio
 from aiogram import Bot  # Для передачи экземпляра бота в задачи рассылки
 from typing import Optional  # Для аннотации типа Optional
 
@@ -13,7 +43,7 @@ from app.scheduler.tasks import (
     test_scheduled_task,
     send_weather_updates,
     send_news_updates,
-    send_events_updates
+    send_events_updates,
 )
 
 # Настройка логгера для модуля
@@ -29,67 +59,96 @@ scheduler: AsyncIOScheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 _bot_instance: Optional[Bot] = None
 
 
-def set_bot_instance(bot: Bot):
+def set_bot_instance(bot: Bot) -> None:
     """
     Устанавливает экземпляр Aiogram Bot для использования в задачах планировщика.
-    Эта функция должна быть вызвана в on_startup бота.
+    Эта функция должна быть вызвана в on_startup бота перед добавлением задач.
 
     Args:
-        bot (Bot): Экземпляр бота Aiogram.
+        bot (Bot): Экземпляр бота Aiogram, который будет использоваться
+                  для отправки сообщений в задачах рассылки.
+
+    Note:
+        - Функция должна быть вызвана до schedule_jobs()
+        - Без установленного экземпляра бота задачи рассылки не будут добавлены
+        - Экземпляр бота хранится в глобальной переменной _bot_instance
     """
     global _bot_instance
     _bot_instance = bot
     logger.info("Экземпляр бота установлен для планировщика.")
 
 
-def schedule_jobs():
+def schedule_jobs() -> None:
     """
     Добавляет все необходимые задачи в планировщик.
     Задачи добавляются только один раз, если они еще не существуют в планировщике.
+
+    Эта функция:
+    1. Проверяет наличие экземпляра бота
+    2. Добавляет тестовую задачу
+    3. Добавляет задачи рассылки с соответствующими интервалами
+    4. Логирует результат добавления каждой задачи
+
+    Note:
+        - Функция должна быть вызвана после set_bot_instance()
+        - Задачи не будут добавлены повторно при повторном вызове
+        - Интервалы задач:
+          * Тестовая задача: каждые 30 секунд
+          * Погода: каждые 3 часа
+          * Новости: каждые 6 часов
+          * События: каждые 2 минуты (в тестовом режиме)
+        - В production режиме рекомендуется использовать cron-триггеры
+          вместо интервалов для более точного контроля времени
     """
     # Если экземпляр бота не установлен, задачи рассылок не будут добавлены
     if _bot_instance is None:
-        logger.warning("Экземпляр бота не установлен. Задачи рассылок не могут быть добавлены.")
+        logger.warning(
+            "Экземпляр бота не установлен. Задачи рассылок не могут быть добавлены."
+        )
         return  # Выходим, если нет бота для рассылок
 
     try:
         # Добавляем тестовую задачу
-        if not scheduler.get_job('test_task'):
-            scheduler.add_job(test_scheduled_task, 'interval', seconds=30, id='test_task')
+        if not scheduler.get_job("test_task"):
+            scheduler.add_job(
+                test_scheduled_task, "interval", seconds=30, id="test_task"
+            )
             logger.info("Тестовая задача добавлена в планировщик (каждые 30 секунд).")
 
         # Добавляем задачи рассылок, передавая экземпляр бота как аргумент
         # Проверяем, что задача еще не добавлена, чтобы избежать дублирования при повторном запуске
-        if not scheduler.get_job('weather_updates_interval'):
+        if not scheduler.get_job("weather_updates_interval"):
             scheduler.add_job(
                 send_weather_updates,
-                'interval',  # Триггер: интервал
+                "interval",  # Триггер: интервал
                 hours=3,  # Интервал: каждые 3 часа
-                id='weather_updates_interval',
-                args=[_bot_instance]  # Передаем экземпляр бота в задачу
+                id="weather_updates_interval",
+                args=[_bot_instance],  # Передаем экземпляр бота в задачу
             )
             logger.info("Задача рассылки погоды добавлена (каждые 3 часа).")
 
-        if not scheduler.get_job('news_updates_interval'):
+        if not scheduler.get_job("news_updates_interval"):
             scheduler.add_job(
                 send_news_updates,
-                'interval',  # Триггер: интервал
+                "interval",  # Триггер: интервал
                 hours=6,  # Интервал: каждые 6 часов
-                id='news_updates_interval',
-                args=[_bot_instance]  # Передаем экземпляр бота
+                id="news_updates_interval",
+                args=[_bot_instance],  # Передаем экземпляр бота
             )
             logger.info("Задача рассылки новостей добавлена (каждые 6 часов).")
 
-        if not scheduler.get_job('events_updates_task'):
+        if not scheduler.get_job("events_updates_task"):
             scheduler.add_job(
                 send_events_updates,
-                'interval',  # Триггер: интервал
+                "interval",  # Триггер: интервал
                 minutes=2,  # Интервал для теста: каждые 2 минуты. В production лучше использовать 'cron'.
                 # Пример для production: 'cron', hour=9, minute=30, id='events_updates_cron'
-                id='events_updates_task',
-                args=[_bot_instance]  # Передаем экземпляр бота
+                id="events_updates_task",
+                args=[_bot_instance],  # Передаем экземпляр бота
             )
-            logger.info("Задача рассылки событий добавлена (для теста - каждые 2 минуты).")
+            logger.info(
+                "Задача рассылки событий добавлена (для теста - каждые 2 минуты)."
+            )
 
         # Планировщик стартует в on_startup функции бота, когда event loop уже запущен.
         # scheduler.start() # <-- Эту строку убрали отсюда, чтобы избежать RuntimeError: no running event loop
@@ -98,10 +157,21 @@ def schedule_jobs():
         logger.error(f"Ошибка при добавлении задач в планировщик: {e}", exc_info=True)
 
 
-def shutdown_scheduler():
+def shutdown_scheduler() -> None:
     """
     Корректно останавливает планировщик APScheduler.
     Эта функция должна быть вызвана при завершении работы приложения.
+
+    Функция:
+    1. Проверяет, запущен ли планировщик
+    2. Если запущен, останавливает все запланированные задачи
+    3. Логирует результат операции
+
+    Note:
+        - Функция должна быть вызвана в on_shutdown бота
+        - Остановка планировщика происходит в фоновом режиме
+        - Все незавершенные задачи будут корректно завершены
+        - После остановки планировщика новые задачи не могут быть добавлены
     """
     if scheduler.running:
         try:

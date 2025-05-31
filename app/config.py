@@ -1,10 +1,27 @@
+"""
+Модуль конфигурации приложения.
+Использует pydantic-settings для загрузки и валидации настроек из переменных окружения.
+
+Этот модуль:
+1. Загружает переменные из .env файла
+2. Определяет структуру настроек приложения
+3. Создает глобальный экземпляр настроек
+4. Обеспечивает типизацию и валидацию всех настроек
+
+Пример использования:
+    from app.config import settings
+    bot_token = settings.TELEGRAM_BOT_TOKEN
+    db_url = settings.DATABASE_URL
+"""
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from dotenv import load_dotenv # Для явной загрузки .env файла
+from dotenv import load_dotenv  # Для явной загрузки .env файла
 
 # Явно загружаем переменные из .env файла в текущее окружение.
 # Это необходимо, если скрипт запускается не из корневой директории проекта,
 # или если pydantic-settings не находит .env автоматически в данном контексте.
 load_dotenv()
+
 
 class Settings(BaseSettings):
     """
@@ -12,31 +29,61 @@ class Settings(BaseSettings):
     Использует pydantic-settings для автоматической загрузки и валидации типов.
 
     Переменные загружаются из файла .env в корневой директории проекта.
+    Все обязательные поля должны быть определены в .env файле,
+    иначе приложение не запустится (pydantic выбросит ValidationError).
+
+    Attributes:
+        TELEGRAM_BOT_TOKEN (str): Токен Telegram бота, полученный от @BotFather.
+                                 Обязательное поле.
+        DATABASE_URL (str): URL для подключения к базе данных.
+                           Формат: sqlite:///./app/database/infopalbot.db
+                           Обязательное поле.
+        WEATHER_API_KEY (str): Ключ API для сервиса погоды (OpenWeatherMap).
+                              Опциональное поле, по умолчанию пустая строка.
+        NEWS_API_KEY (str): Ключ API для сервиса новостей (NewsAPI.org).
+                           Опциональное поле, по умолчанию пустая строка.
+        EVENTS_API_KEY (str): Ключ API для сервиса событий.
+                             Опциональное поле, по умолчанию пустая строка.
+        LOG_LEVEL (str): Уровень логирования приложения.
+                        Возможные значения: "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL".
+                        По умолчанию "INFO".
     """
+
     # Конфигурация модели настроек для pydantic-settings
     model_config = SettingsConfigDict(
-        env_file=".env",         # Указываем файл, из которого загружать переменные
-        env_file_encoding='utf-8' # Указываем кодировку файла
+        env_file=".env",  # Указываем файл, из которого загружать переменные
+        env_file_encoding="utf-8",  # Указываем кодировку файла
     )
 
     # Настройки Telegram бота
-    TELEGRAM_BOT_TOKEN: str      # Токен Telegram бота. Получается у @BotFather.
+    TELEGRAM_BOT_TOKEN: str  # Токен Telegram бота. Получается у @BotFather.
+    # Обязательное поле, без него бот не запустится.
 
     # Настройки базы данных
-    DATABASE_URL: str            # URL для подключения к базе данных (например, sqlite:///./app/database/infopalbot.db).
+    DATABASE_URL: str  # URL для подключения к базе данных.
+    # Формат: sqlite:///./app/database/infopalbot.db
+    # Обязательное поле, без него приложение не запустится.
 
     # Ключи API внешних сервисов
     # Если ключ не указан в .env, используется пустая строка.
-    WEATHER_API_KEY: str = ""    # Ключ API для сервиса погоды (например, OpenWeatherMap).
-    NEWS_API_KEY: str = ""       # Ключ API для сервиса новостей (например, NewsAPI.org).
-    EVENTS_API_KEY: str = ""     # Ключ API для сервиса событий (если используется, например, KudaGo не требует ключа).
+    # При отсутствии ключа соответствующий функционал будет недоступен.
+    WEATHER_API_KEY: str = ""  # Ключ API для сервиса погоды (OpenWeatherMap).
+    # Без ключа функционал погоды будет недоступен.
+    NEWS_API_KEY: str = ""  # Ключ API для сервиса новостей (NewsAPI.org).
+    # Без ключа функционал новостей будет недоступен.
+    EVENTS_API_KEY: str = ""  # Ключ API для сервиса событий.
+    # KudaGo не требует ключа, но может потребоваться для других сервисов.
 
     # Настройки логирования
-    LOG_LEVEL: str = "INFO"      # Уровень логирования (например, "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL").
+    LOG_LEVEL: str = "INFO"  # Уровень логирования приложения.
+    # Возможные значения: "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL".
+    # По умолчанию "INFO".
 
     # Опциональные настройки, которые могут быть добавлены в будущем
-    # ADMIN_TELEGRAM_ID: int | None = None # Telegram ID администратора для специальных команд.
+    # ADMIN_TELEGRAM_ID: int | None = None  # Telegram ID администратора для специальных команд.
+    # Позволит добавить административные функции в будущем.
+
 
 # Создаем единственный экземпляр настроек, который будет использоваться во всем приложении.
-# Это обеспечивает централизованный доступ к конфигурации.
+# Это обеспечивает централизованный доступ к конфигурации и соблюдение паттерна Singleton.
 settings = Settings()
