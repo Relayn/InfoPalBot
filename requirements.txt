@@ -24,6 +24,7 @@ APScheduler
 # Testing dependencies
 pytest
 pytest-asyncio
+pytest-cov
 httpx[testing] # Утилиты для тестирования httpx
 
 # Code formatting and linting
