@@ -19,3 +19,4 @@ TASK.md
 app/database/infopalbot.db
 app/database/infopalbot.db
 app/database/infopalbot.db
+pyproject.toml

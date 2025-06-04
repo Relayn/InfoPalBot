@@ -99,6 +99,173 @@ async def test_get_latest_news_no_api_key():
         result = await get_latest_news(query="test")
         assert result is None
 
+# НОВЫЕ ТЕСТЫ ДЛЯ ПУСТЫХ СТАТЕЙ В GET_LATEST_NEWS:
+@pytest.mark.asyncio
+async def test_get_latest_news_no_articles_with_from_date():
+    """Тест: get_latest_news, API вернул "ok", но пустой список статей (с use_from_date=True)."""
+    query = "несуществующий_запрос"
+    api_key = "test_news_api_key"
+    empty_articles_response = {
+        "status": "ok",
+        "totalResults": 0,
+        "articles": [],
+    }
+    mock_settings = MagicMock(spec=Settings)
+    mock_settings.NEWS_API_KEY = api_key
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = empty_articles_response
+
+    with patch('app.api_clients.news.settings', mock_settings), \
+         patch('httpx.AsyncClient') as MockAsyncClient, \
+         patch('app.api_clients.news.logger.info') as mock_logger_info:
+        mock_async_client_instance = AsyncMock()
+        mock_async_client_instance.get.return_value = mock_response
+        MockAsyncClient.return_value.__aenter__.return_value = mock_async_client_instance
+
+        result = await get_latest_news(query=query, use_from_date=True)
+
+        assert result == []
+        # Проверяем специфичный лог для этого случая
+        mock_logger_info.assert_any_call(
+            f"(/everything) По запросу '{query}' не найдено статей за последние 24 часа."
+        )
+
+@pytest.mark.asyncio
+async def test_get_latest_news_no_articles_without_from_date():
+    """Тест: get_latest_news, API вернул "ok", но пустой список статей (с use_from_date=False)."""
+    query = "другой_несуществующий_запрос"
+    api_key = "test_news_api_key"
+    empty_articles_response = {
+        "status": "ok",
+        "totalResults": 0,
+        "articles": [],
+    }
+    mock_settings = MagicMock(spec=Settings)
+    mock_settings.NEWS_API_KEY = api_key
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = empty_articles_response
+
+    with patch('app.api_clients.news.settings', mock_settings), \
+         patch('httpx.AsyncClient') as MockAsyncClient, \
+         patch('app.api_clients.news.logger.info') as mock_logger_info:
+        mock_async_client_instance = AsyncMock()
+        mock_async_client_instance.get.return_value = mock_response
+        MockAsyncClient.return_value.__aenter__.return_value = mock_async_client_instance
+
+        result = await get_latest_news(query=query, use_from_date=False)
+
+        assert result == []
+        # Проверяем специфичный лог для этого случая
+        mock_logger_info.assert_any_call(
+            f"(/everything) По запросу '{query}' не найдено статей."
+        )
+
+# НОВЫЕ ТЕСТЫ ДЛЯ ОБРАБОТКИ ОШИБОК HTTPX В GET_LATEST_NEWS:
+@pytest.mark.asyncio
+async def test_get_latest_news_http_status_error():
+    """Тест: get_latest_news обрабатывает HTTPStatusError."""
+    query = "http_error_test"
+    api_key = "test_key"
+    mock_settings = MagicMock(spec=Settings)
+    mock_settings.NEWS_API_KEY = api_key
+
+    mock_httpx_response = MagicMock(spec=httpx.Response)
+    mock_httpx_response.status_code = 401  # Например, неавторизован
+    mock_httpx_response.text = "Invalid API key"
+
+    http_error = httpx.HTTPStatusError(
+        message="Client Error", request=MagicMock(), response=mock_httpx_response
+    )
+
+    with patch('app.api_clients.news.settings', mock_settings), \
+            patch('httpx.AsyncClient') as MockAsyncClient, \
+            patch('app.api_clients.news.logger.error') as mock_logger_error:
+        mock_async_client_instance = AsyncMock()
+        # Мокируем .get() так, чтобы он вызывал ошибку
+        mock_async_client_instance.get.side_effect = http_error
+        MockAsyncClient.return_value.__aenter__.return_value = mock_async_client_instance
+
+        result = await get_latest_news(query=query)
+
+        expected_error_response = {
+            "error": True,
+            "message": f"Ошибка HTTP: {mock_httpx_response.status_code}",
+            "status_code": mock_httpx_response.status_code,
+            "source": "HTTP",
+        }
+        assert result == expected_error_response
+        mock_logger_error.assert_called_once()
+        # Проверяем, что в лог попала информация об ошибке
+        args_log, _ = mock_logger_error.call_args
+        assert f"(/everything) Ошибка HTTP при запросе новостей '{query}'" in args_log[0]
+        assert str(mock_httpx_response.status_code) in args_log[0]
+
+
+@pytest.mark.asyncio
+async def test_get_latest_news_request_error():
+    """Тест: get_latest_news обрабатывает RequestError (сетевая ошибка)."""
+    query = "network_error_test"
+    api_key = "test_key"
+    mock_settings = MagicMock(spec=Settings)
+    mock_settings.NEWS_API_KEY = api_key
+
+    request_error = httpx.RequestError("Connection failed", request=MagicMock())
+
+    with patch('app.api_clients.news.settings', mock_settings), \
+            patch('httpx.AsyncClient') as MockAsyncClient, \
+            patch('app.api_clients.news.logger.error') as mock_logger_error:
+        mock_async_client_instance = AsyncMock()
+        mock_async_client_instance.get.side_effect = request_error
+        MockAsyncClient.return_value.__aenter__.return_value = mock_async_client_instance
+
+        result = await get_latest_news(query=query)
+
+        expected_error_response = {
+            "error": True,
+            "message": "Сетевая ошибка при запросе к сервису новостей.",
+            "source": "Network",
+        }
+        assert result == expected_error_response
+        mock_logger_error.assert_called_once()
+        args_log, _ = mock_logger_error.call_args
+        assert f"(/everything) Ошибка сети при запросе новостей '{query}'" in args_log[0]
+
+
+@pytest.mark.asyncio
+async def test_get_latest_news_json_decode_error():
+    """Тест: get_latest_news обрабатывает ошибку парсинга JSON (как общее Exception)."""
+    query = "json_error_test"
+    api_key = "test_key"
+    mock_settings = MagicMock(spec=Settings)
+    mock_settings.NEWS_API_KEY = api_key
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200  # API вернул OK, но тело ответа - невалидный JSON
+    # Мокируем json() так, чтобы он вызывал ошибку
+    json_decode_exception = ValueError("Invalid JSON")  # ValueError или json.JSONDecodeError
+    mock_response.json.side_effect = json_decode_exception
+
+    with patch('app.api_clients.news.settings', mock_settings), \
+            patch('httpx.AsyncClient') as MockAsyncClient, \
+            patch('app.api_clients.news.logger.error') as mock_logger_error:
+        mock_async_client_instance = AsyncMock()
+        mock_async_client_instance.get.return_value = mock_response  # .get() успешен
+        MockAsyncClient.return_value.__aenter__.return_value = mock_async_client_instance
+
+        result = await get_latest_news(query=query)
+
+        expected_error_response = {
+            "error": True,
+            "message": "Неизвестная ошибка при получении новостей.",
+            "source": "Unknown",
+        }
+        assert result == expected_error_response
+        mock_logger_error.assert_called_once()
+        args_log, _ = mock_logger_error.call_args
+        assert f"(/everything) Непредвиденная ошибка при запросе новостей '{query}'" in args_log[0]
+        assert str(json_decode_exception) in args_log[0]
 
 # --- Тесты для get_top_headlines (эндпоинт /top-headlines) ---
 
@@ -197,3 +364,80 @@ async def test_get_top_headlines_http_error():
         # Ожидаем, что наш клиент поймает HTTPStatusError и вернет соответствующий словарь
         expected_error = {"error": True, "message": "Ошибка HTTP: 500", "status_code": 500, "source": "HTTP"}
         assert result == expected_error
+
+
+@pytest.mark.asyncio
+async def test_get_top_headlines_no_api_key():
+    """Тест: get_top_headlines, когда NEWS_API_KEY не установлен."""
+    mock_settings = MagicMock(spec=Settings)
+    mock_settings.NEWS_API_KEY = ""  # Ключ не установлен
+    with patch('app.api_clients.news.settings', mock_settings), \
+            patch('app.api_clients.news.logger.error') as mock_logger_error:
+        result = await get_top_headlines(country="ru")
+        assert result is None
+        mock_logger_error.assert_called_once_with(
+            "NEWS_API_KEY не установлен в настройках. Невозможно получить главные новости."
+        )
+
+@pytest.mark.asyncio
+async def test_get_top_headlines_request_error():
+    """Тест: get_top_headlines обрабатывает RequestError (сетевая ошибка)."""
+    country = "us"
+    api_key = "test_key_top_req_err"
+    mock_settings = MagicMock(spec=Settings)
+    mock_settings.NEWS_API_KEY = api_key
+
+    request_error = httpx.RequestError("DNS resolution failed", request=MagicMock())
+
+    with patch('app.api_clients.news.settings', mock_settings), \
+            patch('httpx.AsyncClient') as MockAsyncClient, \
+            patch('app.api_clients.news.logger.error') as mock_logger_error:
+        mock_async_client_instance = AsyncMock()
+        mock_async_client_instance.get.side_effect = request_error
+        MockAsyncClient.return_value.__aenter__.return_value = mock_async_client_instance
+
+        result = await get_top_headlines(country=country)
+
+        expected_error_response = {
+            "error": True,
+            "message": "Сетевая ошибка при запросе к сервису новостей.",
+            "source": "Network",
+        }
+        assert result == expected_error_response
+        mock_logger_error.assert_called_once()
+        args_log, _ = mock_logger_error.call_args
+        assert f"(/top-headlines) Ошибка сети при запросе новостей для страны '{country}'" in args_log[0]
+
+
+@pytest.mark.asyncio
+async def test_get_top_headlines_json_decode_error():
+    """Тест: get_top_headlines обрабатывает ошибку парсинга JSON."""
+    country = "de"
+    api_key = "test_key_top_json_err"
+    mock_settings = MagicMock(spec=Settings)
+    mock_settings.NEWS_API_KEY = api_key
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    json_decode_exception = ValueError("Unexpected token")
+    mock_response.json.side_effect = json_decode_exception
+
+    with patch('app.api_clients.news.settings', mock_settings), \
+            patch('httpx.AsyncClient') as MockAsyncClient, \
+            patch('app.api_clients.news.logger.error') as mock_logger_error:
+        mock_async_client_instance = AsyncMock()
+        mock_async_client_instance.get.return_value = mock_response
+        MockAsyncClient.return_value.__aenter__.return_value = mock_async_client_instance
+
+        result = await get_top_headlines(country=country)
+
+        expected_error_response = {
+            "error": True,
+            "message": "Неизвестная ошибка при получении новостей.",
+            "source": "Unknown",
+        }
+        assert result == expected_error_response
+        mock_logger_error.assert_called_once()
+        args_log, _ = mock_logger_error.call_args
+        assert f"(/top-headlines) Непредвиденная ошибка при запросе новостей для страны '{country}'" in args_log[0]
+        assert str(json_decode_exception) in args_log[0]

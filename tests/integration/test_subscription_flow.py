@@ -21,6 +21,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from app.bot.main import process_city_for_weather_subscription
 from app.bot.main import process_city_for_events_subscription
+from app.bot.main import callback_fsm_cancel_process
+from app.bot.main import cmd_cancel_any_state # Обработчик команды /cancel
+from aiogram.types import ReplyKeyboardRemove # Для проверки удаления клавиатуры
 
 # Вспомогательная функция для создания mock FSMContext
 async def get_mock_fsm_context(initial_state: Optional[SubscriptionStates] = None,
@@ -512,3 +515,691 @@ async def test_subscribe_to_events_successful_flow(integration_session: Session)
     ).first()  # Предполагаем, что это последний лог такого типа
     assert log_step3 is not None
     assert log_step3.details == f"Type: {INFO_TYPE_EVENTS}, City: {city_input_by_user} (slug: {expected_location_slug}), Freq: {default_frequency}"
+
+    @pytest.mark.asyncio
+    async def test_cancel_subscription_at_type_choice_by_button(integration_session: Session):
+        """
+        Интеграционный тест: отмена процесса подписки кнопкой "Отмена" на этапе выбора типа.
+        """
+        telegram_user_id = 777005
+
+        # --- Шаг 0: Создаем пользователя ---
+        db_user = create_user(session=integration_session, telegram_id=telegram_user_id)
+
+        # --- Шаг 1: Пользователь отправляет команду /subscribe ---
+        mock_message_subscribe = AsyncMock(spec=Message)
+        mock_message_subscribe.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id,
+                                                     full_name="Cancel User Button")
+        mock_message_subscribe.chat = MagicMock(spec=Chat, id=telegram_user_id)
+        mock_message_subscribe.answer = AsyncMock()
+
+        mock_fsm_context_step1 = await get_mock_fsm_context()
+        # Мокируем set_state для проверки его вызова в process_subscribe_command_start
+        mock_fsm_context_step1.set_state = AsyncMock()
+
+        mock_session_cm_step1 = MagicMock()
+        mock_session_cm_step1.__enter__.return_value = integration_session
+        mock_session_cm_step1.__exit__ = MagicMock(return_value=None)
+        mock_generator_step1 = MagicMock()
+        mock_generator_step1.__next__.return_value = mock_session_cm_step1
+
+        with patch('app.bot.main.get_session', return_value=mock_generator_step1):
+            await process_subscribe_command_start(mock_message_subscribe, mock_fsm_context_step1)
+
+        # Минимальные проверки для Шага 1
+        mock_message_subscribe.answer.assert_called_once()
+        mock_fsm_context_step1.set_state.assert_called_once_with(SubscriptionStates.choosing_info_type)
+
+        # --- Шаг 2: Пользователь нажимает кнопку "Отмена" ---
+        mock_callback_query_cancel = AsyncMock(spec=CallbackQuery)
+        mock_callback_query_cancel.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id)
+        mock_callback_query_cancel.data = "subscribe_fsm_cancel"  # Это callback_data для кнопки отмены
+        mock_callback_query_cancel.message = AsyncMock(spec=Message)
+        mock_callback_query_cancel.message.edit_text = AsyncMock()
+        mock_callback_query_cancel.answer = AsyncMock()
+
+        # FSMContext для этого шага должен быть в состоянии choosing_info_type
+        mock_fsm_context_step2 = await get_mock_fsm_context(initial_state=SubscriptionStates.choosing_info_type)
+        # Мокируем clear для проверки его вызова
+        mock_fsm_context_step2.clear = AsyncMock()
+
+        mock_session_cm_step2 = MagicMock()
+        mock_session_cm_step2.__enter__.return_value = integration_session
+        mock_session_cm_step2.__exit__ = MagicMock(return_value=None)
+        mock_generator_step2 = MagicMock()
+        mock_generator_step2.__next__.return_value = mock_session_cm_step2
+
+        with patch('app.bot.main.get_session', return_value=mock_generator_step2):
+            await callback_fsm_cancel_process(mock_callback_query_cancel, mock_fsm_context_step2)
+
+        # Проверки для Шага 2
+        mock_callback_query_cancel.answer.assert_called_once()
+        mock_callback_query_cancel.message.edit_text.assert_called_once_with("Процесс подписки отменен.")
+        mock_fsm_context_step2.clear.assert_called_once()
+
+        # Проверка лога для шага 2
+        log_step2 = integration_session.exec(
+            select(Log)
+            .where(Log.user_id == db_user.id)
+            .where(Log.command == "subscribe_fsm_cancel")
+            .order_by(Log.timestamp.desc())  # Берем последний лог отмены
+        ).first()
+        assert log_step2 is not None
+        assert log_step2.details == "Cancelled type choice by button"
+
+
+@pytest.mark.asyncio
+async def test_cancel_subscription_at_city_input_by_command(integration_session: Session):
+    """
+    Интеграционный тест: отмена процесса подписки командой /cancel на этапе ввода города.
+    """
+    telegram_user_id = 777006
+
+    # --- Шаг 0: Создаем пользователя ---
+    db_user = create_user(session=integration_session, telegram_id=telegram_user_id)
+
+    # --- Шаг 1: Пользователь инициирует подписку и выбирает "Погода" ---
+    #   Подготовка FSM к состоянию entering_city_weather
+
+    #   Шаг 1.1: /subscribe
+    mock_message_subscribe = AsyncMock(spec=Message)
+    mock_message_subscribe.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id, full_name="CancelCmd User")
+    mock_message_subscribe.chat = MagicMock(spec=Chat, id=telegram_user_id)
+    mock_message_subscribe.answer = AsyncMock()
+
+    mock_fsm_context_step1_1 = await get_mock_fsm_context()
+    mock_fsm_context_step1_1.set_state = AsyncMock()
+
+    mock_session_cm_step1_1 = MagicMock()
+    mock_session_cm_step1_1.__enter__.return_value = integration_session
+    mock_session_cm_step1_1.__exit__ = MagicMock(return_value=None)
+    mock_generator_step1_1 = MagicMock()
+    mock_generator_step1_1.__next__.return_value = mock_session_cm_step1_1
+
+    with patch('app.bot.main.get_session', return_value=mock_generator_step1_1):
+        await process_subscribe_command_start(mock_message_subscribe, mock_fsm_context_step1_1)
+    mock_fsm_context_step1_1.set_state.assert_called_once_with(SubscriptionStates.choosing_info_type)
+
+    #   Шаг 1.2: Выбор "Погода"
+    mock_callback_query_weather = AsyncMock(spec=CallbackQuery)
+    mock_callback_query_weather.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id)
+    mock_callback_query_weather.data = f"subscribe_type:{INFO_TYPE_WEATHER}"
+    mock_callback_query_weather.message = AsyncMock(spec=Message)
+    mock_callback_query_weather.message.edit_text = AsyncMock()
+    mock_callback_query_weather.answer = AsyncMock()
+
+    # FSMContext для этого шага должен быть в состоянии choosing_info_type,
+    # которое было установлено на предыдущем подшаге.
+    # Мы создаем новый mock FSMContext, но имитируем, что он "продолжает" предыдущий.
+    mock_fsm_context_step1_2 = await get_mock_fsm_context(initial_state=SubscriptionStates.choosing_info_type)
+    mock_fsm_context_step1_2.update_data = AsyncMock()
+    mock_fsm_context_step1_2.set_state = AsyncMock()  # Для проверки перехода в entering_city_weather
+
+    mock_session_cm_step1_2 = MagicMock()
+    mock_session_cm_step1_2.__enter__.return_value = integration_session
+    mock_session_cm_step1_2.__exit__ = MagicMock(return_value=None)
+    mock_generator_step1_2 = MagicMock()
+    mock_generator_step1_2.__next__.return_value = mock_session_cm_step1_2
+
+    with patch('app.bot.main.get_session', return_value=mock_generator_step1_2):
+        await process_info_type_choice(mock_callback_query_weather, mock_fsm_context_step1_2)
+
+    mock_fsm_context_step1_2.set_state.assert_called_once_with(SubscriptionStates.entering_city_weather)
+    # Убедились, что FSM готов к вводу города
+
+    # --- Шаг 2: Пользователь отправляет команду /cancel ---
+    mock_message_cancel = AsyncMock(spec=Message)
+    mock_message_cancel.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id)
+    mock_message_cancel.chat = MagicMock(spec=Chat, id=telegram_user_id)  # Нужен для ответа
+    mock_message_cancel.answer = AsyncMock()  # cmd_cancel_any_state использует message.answer
+
+    # FSMContext для этого шага должен быть в состоянии entering_city_weather
+    mock_fsm_context_step2 = await get_mock_fsm_context(initial_state=SubscriptionStates.entering_city_weather)
+    # Мокируем get_state, чтобы он возвращал текущее состояние для cmd_cancel_any_state
+    mock_fsm_context_step2.get_state = AsyncMock(return_value=SubscriptionStates.entering_city_weather.state)
+    mock_fsm_context_step2.clear = AsyncMock()  # Мокируем для проверки очистки
+
+    mock_direct_context_manager_step2 = MagicMock()
+    mock_direct_context_manager_step2.__enter__.return_value = integration_session
+    mock_direct_context_manager_step2.__exit__ = MagicMock(return_value=None)
+
+    # Патчим get_session, чтобы он возвращал этот контекстный менеджер
+    with patch('app.bot.main.get_session', return_value=mock_direct_context_manager_step2):
+        await cmd_cancel_any_state(mock_message_cancel, mock_fsm_context_step2)
+
+    # Проверки для Шага 2
+    mock_message_cancel.answer.assert_called_once_with(
+        "Действие отменено.", reply_markup=ReplyKeyboardRemove()
+    )
+    mock_fsm_context_step2.clear.assert_called_once()
+
+    # Проверка лога для шага 2 (отмена)
+    log_step2_cancel = integration_session.exec(
+        select(Log)
+        .where(Log.user_id == db_user.id)
+        .where(Log.command == "/cancel")
+        .order_by(Log.timestamp.desc())
+    ).first()
+    assert log_step2_cancel is not None
+    # В cmd_cancel_any_state state.get_state() возвращает строку типа "SubscriptionStates:entering_city_weather"
+    assert log_step2_cancel.details == f"State before cancel: {SubscriptionStates.entering_city_weather.state}"
+
+@pytest.mark.asyncio
+async def test_subscribe_to_weather_already_subscribed_flow(integration_session: Session):
+    """
+    Интеграционный тест: попытка подписки на погоду, когда пользователь уже подписан на этот город.
+    """
+    telegram_user_id = 777007
+    city_name = "Берлин"
+    default_frequency = "daily"
+
+    # --- Шаг 0: Создаем пользователя и существующую подписку на погоду для этого города ---
+    db_user = create_user(session=integration_session, telegram_id=telegram_user_id)
+    existing_sub = Subscription(
+        user_id=db_user.id,
+        info_type=INFO_TYPE_WEATHER,
+        frequency=default_frequency,
+        details=city_name,  # Подписка на тот же город
+        status="active"
+    )
+    integration_session.add(existing_sub)
+    integration_session.commit()
+    integration_session.refresh(existing_sub)
+
+    # --- Шаг 1: Пользователь инициирует подписку и выбирает "Погода" ---
+    #   Шаг 1.1: /subscribe
+    mock_message_subscribe = AsyncMock(spec=Message)
+    mock_message_subscribe.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id, full_name="WeatherDup User")
+    mock_message_subscribe.chat = MagicMock(spec=Chat, id=telegram_user_id)
+    mock_message_subscribe.answer = AsyncMock()
+
+    mock_fsm_context_step1_1 = await get_mock_fsm_context()
+    mock_fsm_context_step1_1.set_state = AsyncMock()
+
+    mock_session_cm_s1_1 = MagicMock()
+    mock_session_cm_s1_1.__enter__.return_value = integration_session
+    mock_session_cm_s1_1.__exit__ = MagicMock(return_value=None)
+    mock_generator_s1_1 = MagicMock()
+    mock_generator_s1_1.__next__.return_value = mock_session_cm_s1_1
+
+    with patch('app.bot.main.get_session', return_value=mock_generator_s1_1):
+        await process_subscribe_command_start(mock_message_subscribe, mock_fsm_context_step1_1)
+    mock_fsm_context_step1_1.set_state.assert_called_once_with(SubscriptionStates.choosing_info_type)
+
+    #   Шаг 1.2: Выбор "Погода"
+    mock_callback_query_weather = AsyncMock(spec=CallbackQuery)
+    mock_callback_query_weather.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id)
+    mock_callback_query_weather.data = f"subscribe_type:{INFO_TYPE_WEATHER}"
+    mock_callback_query_weather.message = AsyncMock(spec=Message)
+    mock_callback_query_weather.message.edit_text = AsyncMock()
+    mock_callback_query_weather.answer = AsyncMock()
+
+    mock_fsm_context_step1_2 = await get_mock_fsm_context(initial_state=SubscriptionStates.choosing_info_type)
+    mock_fsm_context_step1_2.update_data = AsyncMock()
+    mock_fsm_context_step1_2.set_state = AsyncMock()
+
+    mock_session_cm_s1_2 = MagicMock()
+    mock_session_cm_s1_2.__enter__.return_value = integration_session
+    mock_session_cm_s1_2.__exit__ = MagicMock(return_value=None)
+    mock_generator_s1_2 = MagicMock()
+    mock_generator_s1_2.__next__.return_value = mock_session_cm_s1_2
+
+    with patch('app.bot.main.get_session', return_value=mock_generator_s1_2):
+        await process_info_type_choice(mock_callback_query_weather, mock_fsm_context_step1_2)
+    mock_fsm_context_step1_2.set_state.assert_called_once_with(SubscriptionStates.entering_city_weather)
+    mock_fsm_context_step1_2.update_data.assert_called_once_with(info_type=INFO_TYPE_WEATHER)
+
+    # --- Шаг 2: Пользователь вводит тот же город ---
+    mock_message_city_input = AsyncMock(spec=Message)
+    mock_message_city_input.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id)
+    mock_message_city_input.text = city_name  # Тот же город, на который уже есть подписка
+    mock_message_city_input.answer = AsyncMock()
+
+    mock_fsm_context_step2 = await get_mock_fsm_context(
+        initial_state=SubscriptionStates.entering_city_weather,
+        initial_data={'info_type': INFO_TYPE_WEATHER}
+    )
+    mock_fsm_context_step2.clear = AsyncMock()
+
+    mock_session_cm_s2 = MagicMock()
+    mock_session_cm_s2.__enter__.return_value = integration_session
+    mock_session_cm_s2.__exit__ = MagicMock(return_value=None)
+    mock_generator_s2 = MagicMock()
+    mock_generator_s2.__next__.return_value = mock_session_cm_s2
+
+    with patch('app.bot.main.get_session', return_value=mock_generator_s2):
+        await process_city_for_weather_subscription(mock_message_city_input, mock_fsm_context_step2)
+
+    # Проверки для Шага 2
+    mock_message_city_input.answer.assert_called_once_with(
+        f"Вы уже подписаны на '{INFO_TYPE_WEATHER}' для города '{html.escape(city_name)}'."
+    )
+
+    # Проверка, что НОВАЯ подписка НЕ создана
+    all_weather_subscriptions_for_city = integration_session.exec(
+        select(Subscription).where(
+            Subscription.user_id == db_user.id,
+            Subscription.info_type == INFO_TYPE_WEATHER,
+            Subscription.details == city_name,
+            Subscription.status == "active"
+        )
+    ).all()
+    assert len(
+        all_weather_subscriptions_for_city) == 1, "Должна быть только одна активная подписка на погоду для этого города"
+    assert all_weather_subscriptions_for_city[0].id == existing_sub.id
+
+    mock_fsm_context_step2.clear.assert_called_once()
+
+    # Проверка лога
+    log_duplicate = integration_session.exec(
+        select(Log)
+        .where(Log.user_id == db_user.id)
+        .where(Log.command == "subscribe_attempt_duplicate")
+        .order_by(Log.timestamp.desc())
+    ).first()
+    assert log_duplicate is not None
+    assert log_duplicate.details == f"Type: {INFO_TYPE_WEATHER}, City input: {city_name}"
+
+
+@pytest.mark.asyncio
+async def test_subscribe_to_events_already_subscribed_flow(integration_session: Session):
+    """
+    Интеграционный тест: попытка подписки на события, когда пользователь уже подписан на этот город (slug).
+    """
+    telegram_user_id = 777008
+    city_input = "Санкт-Петербург"  # Город, который вводит пользователь
+    location_slug_details = KUDAGO_LOCATION_SLUGS[city_input.lower()]  # Slug для этого города
+    default_frequency = "daily"
+
+    # --- Шаг 0: Создаем пользователя и существующую подписку на события для этого location_slug ---
+    db_user = create_user(session=integration_session, telegram_id=telegram_user_id)
+    existing_sub = Subscription(
+        user_id=db_user.id,
+        info_type=INFO_TYPE_EVENTS,
+        frequency=default_frequency,
+        details=location_slug_details,  # Подписка на тот же slug
+        status="active"
+    )
+    integration_session.add(existing_sub)
+    integration_session.commit()
+    integration_session.refresh(existing_sub)
+
+    # --- Шаг 1: Пользователь инициирует подписку и выбирает "События" ---
+    #   Шаг 1.1: /subscribe
+    mock_message_subscribe = AsyncMock(spec=Message)
+    mock_message_subscribe.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id, full_name="EventsDup User")
+    mock_message_subscribe.chat = MagicMock(spec=Chat, id=telegram_user_id)
+    mock_message_subscribe.answer = AsyncMock()
+
+    mock_fsm_context_s1_1 = await get_mock_fsm_context()
+    mock_fsm_context_s1_1.set_state = AsyncMock()
+
+    mock_session_cm_s1_1 = MagicMock()
+    mock_session_cm_s1_1.__enter__.return_value = integration_session
+    mock_session_cm_s1_1.__exit__ = MagicMock(return_value=None)
+    mock_generator_s1_1 = MagicMock()
+    mock_generator_s1_1.__next__.return_value = mock_session_cm_s1_1
+
+    with patch('app.bot.main.get_session', return_value=mock_generator_s1_1):
+        await process_subscribe_command_start(mock_message_subscribe, mock_fsm_context_s1_1)
+    mock_fsm_context_s1_1.set_state.assert_called_once_with(SubscriptionStates.choosing_info_type)
+
+    #   Шаг 1.2: Выбор "События"
+    mock_callback_query_events = AsyncMock(spec=CallbackQuery)
+    mock_callback_query_events.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id)
+    mock_callback_query_events.data = f"subscribe_type:{INFO_TYPE_EVENTS}"
+    mock_callback_query_events.message = AsyncMock(spec=Message)
+    mock_callback_query_events.message.edit_text = AsyncMock()
+    mock_callback_query_events.answer = AsyncMock()
+
+    mock_fsm_context_s1_2 = await get_mock_fsm_context(initial_state=SubscriptionStates.choosing_info_type)
+    mock_fsm_context_s1_2.update_data = AsyncMock()
+    mock_fsm_context_s1_2.set_state = AsyncMock()
+
+    mock_session_cm_s1_2 = MagicMock()
+    mock_session_cm_s1_2.__enter__.return_value = integration_session
+    mock_session_cm_s1_2.__exit__ = MagicMock(return_value=None)
+    mock_generator_s1_2 = MagicMock()
+    mock_generator_s1_2.__next__.return_value = mock_session_cm_s1_2
+
+    with patch('app.bot.main.get_session', return_value=mock_generator_s1_2):
+        await process_info_type_choice(mock_callback_query_events, mock_fsm_context_s1_2)
+    mock_fsm_context_s1_2.set_state.assert_called_once_with(SubscriptionStates.entering_city_events)
+    mock_fsm_context_s1_2.update_data.assert_called_once_with(info_type=INFO_TYPE_EVENTS)
+
+    # --- Шаг 2: Пользователь вводит тот же город (соответствующий slug'у) ---
+    mock_message_city_input = AsyncMock(spec=Message)
+    mock_message_city_input.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id)
+    mock_message_city_input.text = city_input  # Тот же город
+    mock_message_city_input.answer = AsyncMock()
+
+    mock_fsm_context_s2 = await get_mock_fsm_context(
+        initial_state=SubscriptionStates.entering_city_events,
+        initial_data={'info_type': INFO_TYPE_EVENTS}
+    )
+    mock_fsm_context_s2.clear = AsyncMock()
+
+    mock_session_cm_s2 = MagicMock()
+    mock_session_cm_s2.__enter__.return_value = integration_session
+    mock_session_cm_s2.__exit__ = MagicMock(return_value=None)
+    mock_generator_s2 = MagicMock()
+    mock_generator_s2.__next__.return_value = mock_session_cm_s2
+
+    with patch('app.bot.main.get_session', return_value=mock_generator_s2):
+        await process_city_for_events_subscription(mock_message_city_input, mock_fsm_context_s2)
+
+    # Проверки для Шага 2
+    mock_message_city_input.answer.assert_called_once_with(
+        f"Вы уже подписаны на '{INFO_TYPE_EVENTS}' для города '{html.escape(city_input)}'."
+    )
+
+    # Проверка, что НОВАЯ подписка НЕ создана
+    all_event_subscriptions_for_slug = integration_session.exec(
+        select(Subscription).where(
+            Subscription.user_id == db_user.id,
+            Subscription.info_type == INFO_TYPE_EVENTS,
+            Subscription.details == location_slug_details,  # Проверяем по slug'у
+            Subscription.status == "active"
+        )
+    ).all()
+    assert len(
+        all_event_subscriptions_for_slug) == 1, "Должна быть только одна активная подписка на события для этого slug"
+    assert all_event_subscriptions_for_slug[0].id == existing_sub.id
+
+    mock_fsm_context_s2.clear.assert_called_once()
+
+    # Проверка лога
+    log_duplicate = integration_session.exec(
+        select(Log)
+        .where(Log.user_id == db_user.id)
+        .where(Log.command == "subscribe_attempt_duplicate")
+        .order_by(Log.timestamp.desc())
+    ).first()
+    assert log_duplicate is not None
+    assert log_duplicate.details == f"Type: {INFO_TYPE_EVENTS}, City input: {city_input}, slug: {location_slug_details}"
+
+
+@pytest.mark.asyncio
+async def test_subscribe_to_events_invalid_city_flow(integration_session: Session):
+    """
+    Интеграционный тест: пользователь вводит неподдерживаемый город при подписке на события.
+    Ожидается: сообщение об ошибке, FSM остается в состоянии entering_city_events.
+    """
+    telegram_user_id = 777009
+    invalid_city_input = "Урюпинск"  # Город, которого нет в KUDAGO_LOCATION_SLUGS
+
+    # --- Шаг 0: Создаем пользователя ---
+    db_user = create_user(session=integration_session, telegram_id=telegram_user_id)
+
+    # --- Шаг 1: Пользователь инициирует подписку и выбирает "События" ---
+    #   (Аналогично предыдущим тестам, доводим FSM до состояния entering_city_events)
+    #   Шаг 1.1: /subscribe
+    mock_message_subscribe = AsyncMock(spec=Message)
+    mock_message_subscribe.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id, full_name="InvalidCity User")
+    mock_message_subscribe.chat = MagicMock(spec=Chat, id=telegram_user_id)
+    mock_message_subscribe.answer = AsyncMock()
+
+    mock_fsm_context_s1_1 = await get_mock_fsm_context()
+    mock_fsm_context_s1_1.set_state = AsyncMock()
+
+    mock_session_cm_s1_1 = MagicMock()
+    mock_session_cm_s1_1.__enter__.return_value = integration_session
+    mock_session_cm_s1_1.__exit__ = MagicMock(return_value=None)
+    mock_generator_s1_1 = MagicMock()
+    mock_generator_s1_1.__next__.return_value = mock_session_cm_s1_1
+
+    with patch('app.bot.main.get_session', return_value=mock_generator_s1_1):
+        await process_subscribe_command_start(mock_message_subscribe, mock_fsm_context_s1_1)
+    mock_fsm_context_s1_1.set_state.assert_called_once_with(SubscriptionStates.choosing_info_type)
+
+    #   Шаг 1.2: Выбор "События"
+    mock_callback_query_events = AsyncMock(spec=CallbackQuery)
+    mock_callback_query_events.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id)
+    mock_callback_query_events.data = f"subscribe_type:{INFO_TYPE_EVENTS}"
+    mock_callback_query_events.message = AsyncMock(spec=Message)
+    mock_callback_query_events.message.edit_text = AsyncMock()
+    mock_callback_query_events.answer = AsyncMock()
+
+    mock_fsm_context_s1_2 = await get_mock_fsm_context(initial_state=SubscriptionStates.choosing_info_type)
+    mock_fsm_context_s1_2.update_data = AsyncMock()
+    mock_fsm_context_s1_2.set_state = AsyncMock()
+
+    mock_session_cm_s1_2 = MagicMock()
+    mock_session_cm_s1_2.__enter__.return_value = integration_session
+    mock_session_cm_s1_2.__exit__ = MagicMock(return_value=None)
+    mock_generator_s1_2 = MagicMock()
+    mock_generator_s1_2.__next__.return_value = mock_session_cm_s1_2
+
+    with patch('app.bot.main.get_session', return_value=mock_generator_s1_2):
+        await process_info_type_choice(mock_callback_query_events, mock_fsm_context_s1_2)
+    mock_fsm_context_s1_2.set_state.assert_called_once_with(SubscriptionStates.entering_city_events)
+
+    # --- Шаг 2: Пользователь вводит неподдерживаемый город ---
+    mock_message_city_input = AsyncMock(spec=Message)
+    mock_message_city_input.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id)
+    mock_message_city_input.text = invalid_city_input
+    mock_message_city_input.reply = AsyncMock()  # process_city_for_events_subscription использует reply
+
+    # FSMContext для этого шага должен быть в состоянии entering_city_events
+    # и содержать info_type из предыдущего шага
+    mock_fsm_context_s2 = await get_mock_fsm_context(
+        initial_state=SubscriptionStates.entering_city_events,
+        initial_data={'info_type': INFO_TYPE_EVENTS}
+    )
+    mock_fsm_context_s2.clear = AsyncMock()  # Мокируем, чтобы проверить, что он НЕ был вызван
+    # get_state и set_state не должны вызываться внутри process_city_for_events_subscription при невалидном городе
+    mock_fsm_context_s2.get_state = AsyncMock()
+    mock_fsm_context_s2.set_state = AsyncMock()
+
+    mock_session_cm_s2 = MagicMock()
+    mock_session_cm_s2.__enter__.return_value = integration_session
+    mock_session_cm_s2.__exit__ = MagicMock(return_value=None)
+    mock_generator_s2 = MagicMock()
+    mock_generator_s2.__next__.return_value = mock_session_cm_s2
+
+    with patch('app.bot.main.get_session', return_value=mock_generator_s2):
+        await process_city_for_events_subscription(mock_message_city_input, mock_fsm_context_s2)
+
+    # Проверки для Шага 2
+    mock_message_city_input.reply.assert_called_once_with(
+        f"К сожалению, не знаю событий для города '{html.escape(invalid_city_input)}'...\nПопробуйте: Москва, Санкт-Петербург..."
+    )
+
+    # Проверка, что подписка НЕ создана
+    subscription_in_db = integration_session.exec(
+        select(Subscription).where(
+            Subscription.user_id == db_user.id,
+            Subscription.info_type == INFO_TYPE_EVENTS
+        )
+    ).first()
+    assert subscription_in_db is None, "Подписка не должна была быть создана для невалидного города"
+
+    # Проверка, что состояние FSM НЕ было очищено (пользователь должен иметь возможность попробовать снова или отменить)
+    mock_fsm_context_s2.clear.assert_not_called()
+    # И что состояние не менялось
+    mock_fsm_context_s2.set_state.assert_not_called()
+
+    # Проверка лога
+    log_invalid_city = integration_session.exec(
+        select(Log)
+        .where(Log.user_id == db_user.id)
+        .where(Log.command == "subscribe_city_unsupported")
+        .order_by(Log.timestamp.desc())
+    ).first()
+    assert log_invalid_city is not None
+    assert log_invalid_city.details == f"Type: {INFO_TYPE_EVENTS}, City input: {invalid_city_input}"
+
+
+@pytest.mark.asyncio
+async def test_subscribe_to_weather_empty_city_input_flow(integration_session: Session):
+    """
+    Интеграционный тест: пользователь вводит пустое название города при подписке на погоду.
+    Ожидается: сообщение об ошибке, FSM остается в состоянии entering_city_weather.
+    """
+    telegram_user_id = 777010
+    empty_city_input = "   "  # Пустой ввод или пробелы
+
+    # --- Шаг 0: Создаем пользователя ---
+    db_user = create_user(session=integration_session, telegram_id=telegram_user_id)
+
+    # --- Шаг 1: Пользователь инициирует подписку и выбирает "Погода" ---
+    #   (Аналогично предыдущим тестам, доводим FSM до состояния entering_city_weather)
+    #   Шаг 1.1: /subscribe
+    mock_message_subscribe = AsyncMock(spec=Message)
+    mock_message_subscribe.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id, full_name="EmptyCity User")
+    mock_message_subscribe.chat = MagicMock(spec=Chat, id=telegram_user_id)
+    mock_message_subscribe.answer = AsyncMock()
+
+    mock_fsm_context_s1_1 = await get_mock_fsm_context()
+    mock_fsm_context_s1_1.set_state = AsyncMock()
+
+    mock_session_cm_s1_1 = MagicMock()
+    mock_session_cm_s1_1.__enter__.return_value = integration_session
+    mock_session_cm_s1_1.__exit__ = MagicMock(return_value=None)
+    mock_generator_s1_1 = MagicMock()
+    mock_generator_s1_1.__next__.return_value = mock_session_cm_s1_1
+
+    with patch('app.bot.main.get_session', return_value=mock_generator_s1_1):
+        await process_subscribe_command_start(mock_message_subscribe, mock_fsm_context_s1_1)
+    mock_fsm_context_s1_1.set_state.assert_called_once_with(SubscriptionStates.choosing_info_type)
+
+    #   Шаг 1.2: Выбор "Погода"
+    mock_callback_query_weather = AsyncMock(spec=CallbackQuery)
+    mock_callback_query_weather.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id)
+    mock_callback_query_weather.data = f"subscribe_type:{INFO_TYPE_WEATHER}"
+    mock_callback_query_weather.message = AsyncMock(spec=Message)
+    mock_callback_query_weather.message.edit_text = AsyncMock()
+    mock_callback_query_weather.answer = AsyncMock()
+
+    mock_fsm_context_s1_2 = await get_mock_fsm_context(initial_state=SubscriptionStates.choosing_info_type)
+    mock_fsm_context_s1_2.update_data = AsyncMock()
+    mock_fsm_context_s1_2.set_state = AsyncMock()
+
+    mock_session_cm_s1_2 = MagicMock()
+    mock_session_cm_s1_2.__enter__.return_value = integration_session
+    mock_session_cm_s1_2.__exit__ = MagicMock(return_value=None)
+    mock_generator_s1_2 = MagicMock()
+    mock_generator_s1_2.__next__.return_value = mock_session_cm_s1_2
+
+    with patch('app.bot.main.get_session', return_value=mock_generator_s1_2):
+        await process_info_type_choice(mock_callback_query_weather, mock_fsm_context_s1_2)
+    mock_fsm_context_s1_2.set_state.assert_called_once_with(SubscriptionStates.entering_city_weather)
+
+    # --- Шаг 2: Пользователь вводит пустое название города ---
+    mock_message_city_input = AsyncMock(spec=Message)
+    mock_message_city_input.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id)
+    mock_message_city_input.text = empty_city_input  # Пустой ввод
+    mock_message_city_input.reply = AsyncMock()  # process_city_for_weather_subscription использует reply
+
+    mock_fsm_context_s2 = await get_mock_fsm_context(
+        initial_state=SubscriptionStates.entering_city_weather,
+        initial_data={'info_type': INFO_TYPE_WEATHER}
+    )
+    mock_fsm_context_s2.clear = AsyncMock()
+    mock_fsm_context_s2.set_state = AsyncMock()
+
+    mock_session_cm_s2 = MagicMock()
+    mock_session_cm_s2.__enter__.return_value = integration_session
+    mock_session_cm_s2.__exit__ = MagicMock(return_value=None)
+    mock_generator_s2 = MagicMock()
+    mock_generator_s2.__next__.return_value = mock_session_cm_s2
+
+    with patch('app.bot.main.get_session', return_value=mock_generator_s2):
+        await process_city_for_weather_subscription(mock_message_city_input, mock_fsm_context_s2)
+
+    # Проверки для Шага 2
+    mock_message_city_input.reply.assert_called_once_with(
+        "Название города не может быть пустым..."
+    )
+
+    # Проверка, что подписка НЕ создана
+    subscription_in_db = integration_session.exec(
+        select(Subscription).where(
+            Subscription.user_id == db_user.id,
+            Subscription.info_type == INFO_TYPE_WEATHER
+        )
+    ).first()
+    assert subscription_in_db is None, "Подписка на погоду не должна была быть создана при пустом вводе города"
+
+    # Проверка, что состояние FSM НЕ было очищено и НЕ менялось
+    mock_fsm_context_s2.clear.assert_not_called()
+    mock_fsm_context_s2.set_state.assert_not_called()
+
+    # Проверка лога
+    log_empty_city = integration_session.exec(
+        select(Log)
+        .where(Log.user_id == db_user.id)
+        .where(Log.command == "subscribe_city_empty")
+        .order_by(Log.timestamp.desc())
+    ).first()
+    assert log_empty_city is not None
+    assert log_empty_city.details == f"Type: {INFO_TYPE_WEATHER}"
+
+
+@pytest.mark.asyncio
+async def test_cancel_subscription_at_type_choice_by_command(integration_session: Session):
+    """
+    Интеграционный тест: отмена процесса подписки командой /cancel на этапе выбора типа информации.
+    """
+    telegram_user_id = 777011
+
+    # --- Шаг 0: Создаем пользователя ---
+    db_user = create_user(session=integration_session, telegram_id=telegram_user_id)
+
+    # --- Шаг 1: Пользователь отправляет команду /subscribe ---
+    mock_message_subscribe = AsyncMock(spec=Message)
+    mock_message_subscribe.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id, full_name="CancelAtType User")
+    mock_message_subscribe.chat = MagicMock(spec=Chat, id=telegram_user_id)
+    mock_message_subscribe.answer = AsyncMock()
+
+    mock_fsm_context_step1 = await get_mock_fsm_context()
+    mock_fsm_context_step1.set_state = AsyncMock()  # Мокируем для проверки вызова
+
+    mock_session_cm_step1 = MagicMock()
+    mock_session_cm_step1.__enter__.return_value = integration_session
+    mock_session_cm_step1.__exit__ = MagicMock(return_value=None)
+    mock_generator_step1 = MagicMock()
+    mock_generator_step1.__next__.return_value = mock_session_cm_step1
+
+    with patch('app.bot.main.get_session', return_value=mock_generator_step1):
+        await process_subscribe_command_start(mock_message_subscribe, mock_fsm_context_step1)
+
+    # Минимальные проверки для Шага 1
+    mock_message_subscribe.answer.assert_called_once()
+    mock_fsm_context_step1.set_state.assert_called_once_with(SubscriptionStates.choosing_info_type)
+
+    # --- Шаг 2: Пользователь отправляет команду /cancel ---
+    mock_message_cancel = AsyncMock(spec=Message)
+    mock_message_cancel.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id)
+    mock_message_cancel.chat = MagicMock(spec=Chat, id=telegram_user_id)
+    mock_message_cancel.answer = AsyncMock()
+
+    # FSMContext для этого шага должен быть в состоянии choosing_info_type
+    mock_fsm_context_step2 = await get_mock_fsm_context(initial_state=SubscriptionStates.choosing_info_type)
+    # Мокируем get_state, чтобы он возвращал текущее состояние для cmd_cancel_any_state
+    mock_fsm_context_step2.get_state = AsyncMock(return_value=SubscriptionStates.choosing_info_type.state)
+    mock_fsm_context_step2.clear = AsyncMock()  # Мокируем для проверки очистки
+
+    mock_direct_context_manager_step2 = MagicMock()
+    mock_direct_context_manager_step2.__enter__.return_value = integration_session  # При входе возвращаем нашу сессию
+    mock_direct_context_manager_step2.__exit__ = MagicMock(return_value=None)  # __exit__ тоже должен быть моком
+
+    # Патчим get_session, чтобы он возвращал этот контекстный менеджер
+    with patch('app.bot.main.get_session', return_value=mock_direct_context_manager_step2):
+        await cmd_cancel_any_state(mock_message_cancel, mock_fsm_context_step2)
+
+    # Проверки для Шага 2
+    mock_message_cancel.answer.assert_called_once_with(
+        "Действие отменено.", reply_markup=ReplyKeyboardRemove()
+    )
+    mock_fsm_context_step2.clear.assert_called_once()
+
+    # Проверка лога для шага 2 (отмена)
+    log_step2_cancel = integration_session.exec(
+        select(Log)
+        .where(Log.user_id == db_user.id)
+        .where(Log.command == "/cancel")
+        .order_by(Log.timestamp.desc())
+    ).first()
+    assert log_step2_cancel is not None
+    assert log_step2_cancel.details == f"State before cancel: {SubscriptionStates.choosing_info_type.state}"
