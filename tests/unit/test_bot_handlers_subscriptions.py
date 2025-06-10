@@ -23,6 +23,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
 )
 from aiogram.fsm.context import FSMContext
+from sqlmodel import Session
 
 
 @pytest.fixture(name="engine_sub")
@@ -74,12 +75,13 @@ async def test_process_mysubscriptions_command_no_user_sub(session_sub):
     mock_message.from_user = MagicMock(spec=AiogramUser, id=777)
     mock_session_context_manager = MagicMock()
     mock_session_context_manager.__enter__.return_value = session_sub
-    mock_generator = MagicMock()
-    mock_generator.__next__.return_value = mock_session_context_manager
+    mock_session_context_manager.__exit__.return_value = None
 
-    with patch("app.bot.main.get_session", return_value=mock_generator), patch(
-        "app.bot.main.get_user_by_telegram_id", return_value=None
-    ), patch("app.bot.main.log_user_action") as mock_log_action:
+    with patch(
+        "app.bot.main.get_session", return_value=mock_session_context_manager
+    ), patch("app.bot.main.get_user_by_telegram_id", return_value=None), patch(
+        "app.bot.main.log_user_action"
+    ) as mock_log_action:
         await process_mysubscriptions_command(mock_message)
 
         mock_message.answer.assert_called_once_with(
@@ -100,12 +102,13 @@ async def test_process_mysubscriptions_command_no_subscriptions_sub(
     mock_message.from_user = MagicMock(spec=AiogramUser, id=db_user_sub.telegram_id)
     mock_session_context_manager = MagicMock()
     mock_session_context_manager.__enter__.return_value = session_sub
-    mock_generator = MagicMock()
-    mock_generator.__next__.return_value = mock_session_context_manager
+    mock_session_context_manager.__exit__.return_value = None
 
-    with patch("app.bot.main.get_session", return_value=mock_generator), patch(
-        "app.bot.main.get_user_by_telegram_id", return_value=db_user_sub
-    ), patch("app.bot.main.get_subscriptions_by_user_id", return_value=[]), patch(
+    with patch(
+        "app.bot.main.get_session", return_value=mock_session_context_manager
+    ), patch("app.bot.main.get_user_by_telegram_id", return_value=db_user_sub), patch(
+        "app.bot.main.get_subscriptions_by_user_id", return_value=[]
+    ), patch(
         "app.bot.main.log_user_action"
     ) as mock_log_action:
         await process_mysubscriptions_command(mock_message)
@@ -156,12 +159,11 @@ async def test_process_mysubscriptions_command_with_subscriptions_sub(
     mock_subs_list = [sub1, sub2, sub3]
     mock_session_context_manager = MagicMock()
     mock_session_context_manager.__enter__.return_value = session_sub
-    mock_generator = MagicMock()
-    mock_generator.__next__.return_value = mock_session_context_manager
+    mock_session_context_manager.__exit__.return_value = None
 
-    with patch("app.bot.main.get_session", return_value=mock_generator), patch(
-        "app.bot.main.get_user_by_telegram_id", return_value=db_user_sub
-    ), patch(
+    with patch(
+        "app.bot.main.get_session", return_value=mock_session_context_manager
+    ), patch("app.bot.main.get_user_by_telegram_id", return_value=db_user_sub), patch(
         "app.bot.main.get_subscriptions_by_user_id", return_value=mock_subs_list
     ) as mock_get_user_subs_patched, patch(
         "app.bot.main.log_user_action"
@@ -202,12 +204,13 @@ async def test_process_unsubscribe_command_start_no_subscriptions_sub(
     mock_state = AsyncMock(spec=FSMContext)
     mock_session_context_manager = MagicMock()
     mock_session_context_manager.__enter__.return_value = session_sub
-    mock_generator = MagicMock()
-    mock_generator.__next__.return_value = mock_session_context_manager
+    mock_session_context_manager.__exit__.return_value = None
 
-    with patch("app.bot.main.get_session", return_value=mock_generator), patch(
-        "app.bot.main.get_user_by_telegram_id", return_value=db_user_sub
-    ), patch("app.bot.main.get_subscriptions_by_user_id", return_value=[]), patch(
+    with patch(
+        "app.bot.main.get_session", return_value=mock_session_context_manager
+    ), patch("app.bot.main.get_user_by_telegram_id", return_value=db_user_sub), patch(
+        "app.bot.main.get_subscriptions_by_user_id", return_value=[]
+    ), patch(
         "app.bot.main.log_user_action"
     ) as mock_log_action:
         await process_unsubscribe_command_start(mock_message, mock_state)
@@ -238,12 +241,11 @@ async def test_process_unsubscribe_command_start_with_subscriptions_sub(
     mock_subs_list = [sub1]
     mock_session_context_manager = MagicMock()
     mock_session_context_manager.__enter__.return_value = session_sub
-    mock_generator = MagicMock()
-    mock_generator.__next__.return_value = mock_session_context_manager
+    mock_session_context_manager.__exit__.return_value = None
 
-    with patch("app.bot.main.get_session", return_value=mock_generator), patch(
-        "app.bot.main.get_user_by_telegram_id", return_value=db_user_sub
-    ), patch(
+    with patch(
+        "app.bot.main.get_session", return_value=mock_session_context_manager
+    ), patch("app.bot.main.get_user_by_telegram_id", return_value=db_user_sub), patch(
         "app.bot.main.get_subscriptions_by_user_id", return_value=mock_subs_list
     ), patch(
         "app.bot.main.log_user_action"
@@ -285,12 +287,11 @@ async def test_process_unsubscribe_confirm_success_sub(db_user_sub, session_sub)
     mock_state = AsyncMock(spec=FSMContext)
     mock_session_context_manager = MagicMock()
     mock_session_context_manager.__enter__.return_value = session_sub
-    mock_generator = MagicMock()
-    mock_generator.__next__.return_value = mock_session_context_manager
+    mock_session_context_manager.__exit__.return_value = None
 
-    with patch("app.bot.main.get_session", return_value=mock_generator), patch(
-        "app.bot.main.get_user_by_telegram_id", return_value=db_user_sub
-    ), patch(
+    with patch(
+        "app.bot.main.get_session", return_value=mock_session_context_manager
+    ), patch("app.bot.main.get_user_by_telegram_id", return_value=db_user_sub), patch(
         "app.bot.main.delete_subscription", return_value=True
     ) as mock_delete_sub_patched, patch(
         "app.bot.main.log_user_action"
@@ -338,12 +339,13 @@ async def test_process_unsubscribe_confirm_not_users_subscription_sub(
 
     mock_session_context_manager = MagicMock()
     mock_session_context_manager.__enter__.return_value = mock_session_for_get
-    mock_generator = MagicMock()
-    mock_generator.__next__.return_value = mock_session_context_manager
+    mock_session_context_manager.__exit__.return_value = None
 
-    with patch("app.bot.main.get_session", return_value=mock_generator), patch(
-        "app.bot.main.get_user_by_telegram_id", return_value=db_user_sub
-    ), patch("app.bot.main.delete_subscription") as mock_delete_sub_patched, patch(
+    with patch(
+        "app.bot.main.get_session", return_value=mock_session_context_manager
+    ), patch("app.bot.main.get_user_by_telegram_id", return_value=db_user_sub), patch(
+        "app.bot.main.delete_subscription"
+    ) as mock_delete_sub_patched, patch(
         "app.bot.main.log_user_action"
     ) as mock_log_action:
         await process_unsubscribe_confirm(mock_callback_query, mock_state)
@@ -367,10 +369,18 @@ async def test_process_unsubscribe_action_cancel_sub():
     mock_callback_query.message = AsyncMock(spec=Message)
     mock_callback_query.message.edit_text = AsyncMock()
     mock_callback_query.from_user = MagicMock(spec=AiogramUser, id=123)
-    mock_callback_query.data = "unsubscribe_action_cancel"
     mock_state = AsyncMock(spec=FSMContext)
-    with patch("app.bot.main.log_user_action") as mock_log_action:
+    mock_session_context_manager = MagicMock()
+    mock_session_context_manager.__enter__.return_value = MagicMock(
+        spec=Session
+    )  # Тут не нужна реальная сессия
+    mock_session_context_manager.__exit__.return_value = None
+
+    with patch(
+        "app.bot.main.get_session", return_value=mock_session_context_manager
+    ), patch("app.bot.main.log_user_action") as mock_log_action:
         await process_unsubscribe_action_cancel(mock_callback_query, mock_state)
+
         mock_callback_query.message.edit_text.assert_called_once_with(
             "Операция отписки отменена."
         )

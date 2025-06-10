@@ -97,7 +97,7 @@ def create_subscription(
     session: Session,
     user_id: int,
     info_type: str,
-    frequency: str,
+    frequency: int,
     details: Optional[str] = None,
 ) -> Subscription:
     """
@@ -109,7 +109,7 @@ def create_subscription(
         session (Session): Сессия базы данных SQLModel.
         user_id (int): ID пользователя (из таблицы User), к которому относится подписка.
         info_type (str): Тип информации (например, "weather", "news_tech").
-        frequency (str): Частота уведомлений (например, "daily", "hourly").
+        frequency (int): Частота уведомлений (например, "daily", "hourly").
         details (Optional[str]): Дополнительные детали (например, город для погоды).
 
     Returns:
@@ -218,15 +218,16 @@ def delete_subscription(session: Session, subscription_id: int) -> bool:
 
 
 def get_active_subscriptions_by_info_type(
-    session: Session, info_type: str
+    session: Session, info_type: str, frequency: Optional[str] = None
 ) -> List[Subscription]:
     """
-    Получает все активные подписки для указанного типа информации.
+    Получает все активные подписки для указанного типа информации и, опционально, частоты.
     Используется планировщиком для рассылок.
 
     Args:
         session (Session): Сессия базы данных SQLModel.
         info_type (str): Тип информации (например, "weather", "news").
+        frequency (Optional[str]): Частота уведомлений (например, "daily"). Если None, возвращает все.
 
     Returns:
         List[Subscription]: Список активных подписок данного типа.
@@ -235,6 +236,11 @@ def get_active_subscriptions_by_info_type(
     statement = select(Subscription).where(
         Subscription.info_type == info_type, Subscription.status == "active"
     )
+
+    # Если указана частота, добавляем дополнительный фильтр
+    if frequency:
+        statement = statement.where(Subscription.frequency == frequency)
+
     subscriptions = session.exec(statement).all()
     return subscriptions
 

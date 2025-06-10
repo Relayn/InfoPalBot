@@ -30,7 +30,7 @@
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from aiogram import Bot  # Для передачи экземпляра бота в задачи рассылки
 from aiogram.enums import ParseMode  # Для явного указания parse_mode в send_message
 import html  # Для экранирования HTML-сущностей в сообщениях
@@ -83,30 +83,11 @@ async def test_scheduled_task() -> None:
 async def send_weather_updates(bot: Bot) -> None:
     """
     Задача для рассылки обновлений погоды подписчикам.
-    Получает активные подписки на погоду, запрашивает данные и отправляет уведомления.
-
-    Процесс работы:
-    1. Получение списка активных подписок на погоду
-    2. Для каждой подписки:
-       - Проверка наличия необходимых данных (город, user_id)
-       - Получение данных пользователя из БД
-       - Запрос погоды через API
-       - Форматирование и отправка сообщения
-    3. Логирование результатов
-
-    Args:
-        bot (Bot): Экземпляр бота Aiogram для отправки сообщений.
-
-    Note:
-        - Задача выполняется каждые 3 часа
-        - Сообщения форматируются с использованием HTML
-        - Обрабатываются все возможные ошибки (API, БД, отправка)
-        - Пропускаются некорректные подписки
-        - Температура возвращается в градусах Цельсия
+    Получает все активные подписки на погоду, проверяет для каждой, пора ли отправлять уведомление,
+    и отправляет, если время пришло.
     """
     logger.info("APScheduler: Запуск задачи send_weather_updates...")
-    with get_session() as db_session:  # Используем контекстный менеджер для сессии БД
-        # Получаем все активные подписки на погоду
+    with get_session() as db_session:
         weather_subscriptions: List[Subscription] = (
             get_active_subscriptions_by_info_type(
                 session=db_session, info_type=INFO_TYPE_WEATHER
@@ -117,67 +98,58 @@ async def send_weather_updates(bot: Bot) -> None:
         )
 
         for sub in weather_subscriptions:
-            # Пропускаем подписки без необходимых деталей или user_id
-            if not sub.details or not sub.user_id:
-                logger.warning(
-                    f"Пропуск подписки ID {sub.id}: отсутствует город (details) или user_id."
-                )
+            now = datetime.now(timezone.utc)
+            # Проверяем, пора ли отправлять уведомление
+            if sub.last_sent_at and (now - sub.last_sent_at) < timedelta(
+                hours=sub.frequency
+            ):
+                continue  # Еще не время
+
+            if not sub.details or not sub.user or not sub.user.telegram_id:
+                logger.warning(f"Пропуск подписки ID {sub.id}: неполные данные.")
                 continue
 
-            # Получаем объект пользователя из БД, чтобы получить его Telegram ID
-            user: Optional[User] = db_session.get(User, sub.user_id)
-            if not user or not user.telegram_id:
-                logger.warning(
-                    f"Не найден пользователь или telegram_id для подписки ID {sub.id} (user_id: {sub.user_id})."
-                )
-                continue
-
-            telegram_id_to_send: int = user.telegram_id
-            city_name: str = sub.details
-
+            telegram_id_to_send = sub.user.telegram_id
+            city_name = sub.details
             logger.info(
                 f"Обработка подписки на погоду для пользователя {telegram_id_to_send}, город: {city_name}"
             )
-            # Получаем данные о погоде через API клиент
-            weather_data: Optional[Dict[str, Any]] = await get_weather_data(city_name)
 
+            weather_data = await get_weather_data(city_name)
             if weather_data and not weather_data.get("error"):
                 try:
-                    # Форматируем сообщение о погоде
-                    description: str = weather_data["weather"][0][
-                        "description"
-                    ].capitalize()
-                    temp: float = weather_data["main"]["temp"]
-                    feels_like: float = weather_data["main"]["feels_like"]
-                    # Формируем текст сообщения
-                    message_text: str = (
-                        f"🔔 <b>Ежедневный прогноз погоды для г. {html.escape(city_name)}:</b>\n"
+                    description = weather_data["weather"][0]["description"].capitalize()
+                    temp = weather_data["main"]["temp"]
+                    feels_like = weather_data["main"]["feels_like"]
+                    message_text = (
+                        f"🔔 <b>Прогноз погоды для г. {html.escape(city_name)}:</b>\n"
                         f"🌡️ Температура: {temp}°C (ощущается как {feels_like}°C)\n"
                         f"☀️ Описание: {description}"
                     )
-                    # Отправляем сообщение пользователю
                     await bot.send_message(
-                        chat_id=telegram_id_to_send,
-                        text=message_text,
-                        parse_mode=ParseMode.HTML,
-                    )  # Явно указываем parse_mode
-                    logger.info(
-                        f"Успешно отправлено уведомление о погоде пользователю {telegram_id_to_send} для города {city_name}."
+                        chat_id=telegram_id_to_send, text=message_text
                     )
+                    logger.info(
+                        f"Успешно отправлено уведомление о погоде пользователю {telegram_id_to_send}."
+                    )
+
+                    # Обновляем время последней отправки
+                    sub.last_sent_at = now
+                    db_session.add(sub)
+                    db_session.commit()
+
                 except Exception as e:
                     logger.error(
-                        f"Ошибка при отправке уведомления о погоде пользователю {telegram_id_to_send} для города {city_name}: {e}",
+                        f"Ошибка при отправке уведомления о погоде пользователю {telegram_id_to_send}: {e}",
                         exc_info=True,
                     )
             elif weather_data and weather_data.get("error"):
-                # Логируем ошибку, полученную от API-клиента
                 logger.warning(
                     f"Не удалось получить данные о погоде для рассылки (город: {city_name}): {weather_data.get('message')}"
                 )
             else:
-                # Логируем случай, когда API-клиент вернул None или неожиданный результат
                 logger.warning(
-                    f"Не удалось получить данные о погоде для рассылки (город: {city_name}), API вернул None или неожиданный результат."
+                    f"Не удалось получить данные о погоде для рассылки (город: {city_name}), API вернул None."
                 )
     logger.info("APScheduler: Задача send_weather_updates завершена.")
 
@@ -185,245 +157,161 @@ async def send_weather_updates(bot: Bot) -> None:
 async def send_news_updates(bot: Bot) -> None:
     """
     Задача для рассылки обновлений новостей подписчикам.
-    Получает активные подписки на новости, запрашивает данные и отправляет уведомления.
-
-    Процесс работы:
-    1. Получение списка активных подписок на новости
-    2. Группировка подписчиков для минимизации дублирования
-    3. Единый запрос новостей для всех подписчиков
-    4. Форматирование общего сообщения
-    5. Рассылка всем подписчикам
-
-    Args:
-        bot (Bot): Экземпляр бота Aiogram для отправки сообщений.
-
-    Note:
-        - Задача выполняется каждые 6 часов
-        - Новости запрашиваются один раз для всех подписчиков
-        - Сообщения форматируются с использованием HTML
-        - Поддерживаются ссылки на источники
-        - Отключается предпросмотр веб-страниц
-        - Обрабатываются все возможные ошибки
+    Работает аналогично send_weather_updates, проверяя время для каждой подписки.
     """
     logger.info("APScheduler: Запуск задачи send_news_updates...")
-    all_news_subscriptions: List[Subscription] = []
     with get_session() as db_session:
         all_news_subscriptions = get_active_subscriptions_by_info_type(
             session=db_session, info_type=INFO_TYPE_NEWS
         )
 
-    if not all_news_subscriptions:
-        logger.info("Нет активных подписок на новости. Рассылка не требуется.")
-        logger.info("APScheduler: Задача send_news_updates завершена.")
-        return
+        if not all_news_subscriptions:
+            logger.info("Нет активных подписок на новости. Рассылка не требуется.")
+            return
 
-    # Получаем уникальные user_id, подписанных на новости.
-    # Это важно, чтобы каждый пользователь получил новости только один раз,
-    # даже если у него несколько одинаковых подписок.
-    user_ids_subscribed_to_news: List[int] = list(
-        set([sub.user_id for sub in all_news_subscriptions if sub.user_id])
-    )
-    logger.info(
-        f"Найдено {len(user_ids_subscribed_to_news)} уникальных пользователей, подписанных на новости."
-    )
+        users_to_notify: Dict[int, Subscription] = {}
+        now = datetime.now(timezone.utc)
 
-    if not user_ids_subscribed_to_news:
+        for sub in all_news_subscriptions:
+            if sub.user_id and (
+                not sub.last_sent_at
+                or (now - sub.last_sent_at) >= timedelta(hours=sub.frequency)
+            ):
+                # Если у пользователя несколько подписок на новости, выбираем самую "старую" для отправки
+                if (
+                    sub.user_id not in users_to_notify
+                    or users_to_notify[sub.user_id].last_sent_at > sub.last_sent_at
+                ):
+                    users_to_notify[sub.user_id] = sub
+
+        if not users_to_notify:
+            logger.info("Для всех новостных подписок время отправки еще не наступило.")
+            return
+
         logger.info(
-            "APScheduler: Задача send_news_updates завершена (нет пользователей для рассылки)."
+            f"Найдено {len(users_to_notify)} пользователей для рассылки новостей."
         )
-        return
 
-    # Получаем новости один раз для всех подписчиков
-    articles_or_error: Optional[List[Dict[str, Any]]] | Dict[str, Any] = (
-        await get_top_headlines(country="ru", page_size=5)
-    )
+        articles = await get_top_headlines()
+        # Проверяем, не вернул ли API ошибку в виде словаря
+        if isinstance(articles, dict) and articles.get("error"):
+            logger.error(
+                f"Ошибка API при получении новостей: {articles.get('message')}"
+            )
+            return  # Прерываем выполнение, если API вернул ошибку
 
-    if isinstance(articles_or_error, dict) and articles_or_error.get("error"):
-        logger.error(
-            f"Ошибка API при получении новостей для рассылки: {articles_or_error.get('message')}"
+        if not articles:
+            logger.warning("Нет новостей для рассылки.")
+            return
+
+        message_text = "🔔 <b>Свежие новости:</b>\n\n" + "\n\n".join(
+            [f"▪️ <a href='{a['url']}'>{html.escape(a['title'])}</a>" for a in articles]
         )
-        logger.info("APScheduler: Задача send_news_updates завершена из-за ошибки API.")
-        return
 
-    if not isinstance(articles_or_error, list) or not articles_or_error:
-        logger.info(
-            "Не получено новостей от API или формат неверный. Рассылка новостей отменена."
-        )
-        logger.info("APScheduler: Задача send_news_updates завершена.")
-        return
-
-    # Формируем общее сообщение с новостями
-    news_message_lines: List[str] = ["<b>📰 Свежие новости (Россия):</b>"]
-    for i, article in enumerate(articles_or_error):
-        title: str = html.escape(article.get("title", "Без заголовка"))
-        url: str = article.get("url", "#")
-        source: str = html.escape(
-            article.get("source", {}).get("name", "Неизвестный источник")
-        )
-        news_message_lines.append(f"{i+1}. <a href='{url}'>{title}</a> ({source})")
-    news_message_text: str = "\n".join(news_message_lines)
-
-    # Рассылаем новости всем уникальным подписанным пользователям
-    with get_session() as db_session:  # Отдельная сессия для получения User объектов
-        for user_id in user_ids_subscribed_to_news:
-            user: Optional[User] = db_session.get(User, user_id)
-            if user and user.telegram_id:
-                try:
-                    await bot.send_message(
-                        chat_id=user.telegram_id,
-                        text=news_message_text,
-                        disable_web_page_preview=True,
-                        parse_mode=ParseMode.HTML,
-                    )  # Явно указываем parse_mode
-                    logger.info(
-                        f"Успешно отправлены новости пользователю {user.telegram_id}."
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Ошибка при отправке новостей пользователю {user.telegram_id}: {e}",
-                        exc_info=True,
-                    )
-            else:
-                logger.warning(
-                    f"Не найден пользователь или telegram_id для user_id: {user_id} при рассылке новостей."
+        for user_id, sub_to_update in users_to_notify.items():
+            try:
+                telegram_id = sub_to_update.user.telegram_id
+                await bot.send_message(
+                    chat_id=telegram_id,
+                    text=message_text,
+                    disable_web_page_preview=True,
                 )
+                logger.info(f"Успешно отправлены новости пользователю {telegram_id}.")
+                sub_to_update.last_sent_at = now
+                db_session.add(sub_to_update)
+
+            except Exception as e:
+                logger.error(
+                    f"Ошибка при отправке новостей пользователю (ID: {user_id}): {e}",
+                    exc_info=True,
+                )
+
+        db_session.commit()
 
     logger.info("APScheduler: Задача send_news_updates завершена.")
 
 
 async def send_events_updates(bot: Bot) -> None:
     """
-    Задача для рассылки обновлений о событиях KudaGo подписчикам.
-    Получает активные подписки на события, запрашивает данные и отправляет уведомления.
-
-    Процесс работы:
-    1. Получение списка активных подписок на события
-    2. Группировка подписчиков по городам для оптимизации запросов
-    3. Для каждого города:
-       - Запрос событий через API KudaGo
-       - Форматирование сообщения с событиями
-       - Рассылка всем подписчикам города
-
-    Args:
-        bot (Bot): Экземпляр бота Aiogram для отправки сообщений.
-
-    Note:
-        - Задача выполняется каждые 2 минуты (в тестовом режиме)
-        - События группируются по городам для минимизации API-запросов
-        - Сообщения форматируются с использованием HTML
-        - Описания событий обрезаются для краткости
-        - Поддерживаются ссылки на события
-        - Обрабатываются все возможные ошибки
+    Задача для рассылки обновлений о событиях подписчикам.
+    Работает аналогично send_weather_updates, проверяя время для каждой подписки.
     """
     logger.info("APScheduler: Запуск задачи send_events_updates...")
     with get_session() as db_session:
-        event_subscriptions: List[Subscription] = get_active_subscriptions_by_info_type(
-            session=db_session, info_type=INFO_TYPE_EVENTS
+        events_subscriptions: List[Subscription] = (
+            get_active_subscriptions_by_info_type(
+                session=db_session, info_type=INFO_TYPE_EVENTS
+            )
         )
-        logger.info(f"Найдено {len(event_subscriptions)} активных подписок на события.")
+        logger.info(
+            f"Найдено {len(events_subscriptions)} активных подписок на события."
+        )
 
-        # Группируем подписки по location_slug, чтобы делать один API запрос на город
-        events_by_location_slug: Dict[str, List[Dict[str, Any]]] = (
-            {}
-        )  # Кэш для событий по городам
-        users_for_location_slug: Dict[str, List[int]] = (
-            {}
-        )  # telegram_id пользователей по городам
+        # Группируем подписчиков по городу (location_slug), чтобы делать один API запрос на город
+        subscriptions_by_city: Dict[str, List[Subscription]] = {}
+        for sub in events_subscriptions:
+            if sub.details:
+                if sub.details not in subscriptions_by_city:
+                    subscriptions_by_city[sub.details] = []
+                subscriptions_by_city[sub.details].append(sub)
 
-        for sub in event_subscriptions:
-            # Пропускаем подписки без необходимых деталей (location_slug) или user_id
-            if not sub.details or not sub.user_id:
-                logger.warning(
-                    f"Пропуск подписки на события ID {sub.id}: отсутствует location_slug или user_id."
-                )
-                continue
+        now = datetime.now(timezone.utc)
 
-            location_slug: str = sub.details
-            user: Optional[User] = db_session.get(User, sub.user_id)
-            if not user or not user.telegram_id:
-                logger.warning(
-                    f"Не найден пользователь или telegram_id для подписки на события ID {sub.id} (user_id: {sub.user_id})."
-                )
-                continue
-
-            if location_slug not in users_for_location_slug:
-                users_for_location_slug[location_slug] = []
-            if (
-                user.telegram_id not in users_for_location_slug[location_slug]
-            ):  # Избегаем дублирования пользователя для одного города
-                users_for_location_slug[location_slug].append(user.telegram_id)
-
-        # Для каждого уникального location_slug получаем события
-        for location_slug, user_telegram_ids in users_for_location_slug.items():
-            if not user_telegram_ids:
-                continue  # Пропускаем, если нет пользователей для этого города
-
-            logger.info(f"Запрос событий KudaGo для location_slug: {location_slug}")
-            # Получаем события через API клиент (запрашиваем, например, 3 ближайших события)
-            kudago_result: Optional[List[Dict[str, Any]]] | Dict[str, Any] = (
-                await get_kudago_events(location=location_slug, page_size=3)
+        for city_slug, subscriptions in subscriptions_by_city.items():
+            # Проверяем, есть ли хотя бы один подписчик в этой группе, которому пора отправлять
+            is_time_to_send_for_group = any(
+                not sub.last_sent_at
+                or (now - sub.last_sent_at) >= timedelta(hours=sub.frequency)
+                for sub in subscriptions
             )
 
-            if isinstance(kudago_result, dict) and kudago_result.get("error"):
-                logger.error(
-                    f"Ошибка API KudaGo при получении событий для '{location_slug}': {kudago_result.get('message')}"
+            if not is_time_to_send_for_group:
+                continue
+
+            logger.info(f"Запрос событий для города: {city_slug}")
+            events_data = await get_kudago_events(location_slug=city_slug, page_size=5)
+
+            if (
+                not events_data
+                or "results" not in events_data
+                or not events_data["results"]
+            ):
+                logger.warning(f"Не найдено событий для города {city_slug}.")
+                continue
+
+            message_text = (
+                f"🔔 <b>Ближайшие события для города с кодом '{html.escape(city_slug)}':</b>\n\n"
+                + "\n\n".join(
+                    [
+                        f"▪️ <a href='{e['site_url']}'>{html.escape(e['title'])}</a>"
+                        for e in events_data["results"]
+                    ]
                 )
-                continue  # Переходим к следующему городу, если есть ошибка API
+            )
 
-            if not isinstance(kudago_result, list) or not kudago_result:
-                logger.info(
-                    f"Не найдено актуальных событий KudaGo для '{location_slug}'."
-                )
-                continue  # Пропускаем рассылку для этого города, если нет событий
+            for sub in subscriptions:
+                # Повторно проверяем для каждого, т.к. в группе могут быть разные частоты
+                if not sub.last_sent_at or (now - sub.last_sent_at) >= timedelta(
+                    hours=sub.frequency
+                ):
+                    try:
+                        telegram_id = sub.user.telegram_id
+                        await bot.send_message(
+                            chat_id=telegram_id,
+                            text=message_text,
+                            disable_web_page_preview=True,
+                        )
+                        logger.info(
+                            f"Успешно отправлены события пользователю {telegram_id} для города {city_slug}."
+                        )
+                        sub.last_sent_at = now
+                        db_session.add(sub)
+                    except Exception as e:
+                        logger.error(
+                            f"Ошибка при отправке событий пользователю (ID: {sub.user_id}): {e}",
+                            exc_info=True,
+                        )
 
-            # Формируем сообщение о событиях
-            # Пытаемся найти "человеческое" название города по его slug'у
-            city_display_name: str = location_slug
-            for name, slug_val in KUDAGO_LOCATION_SLUGS.items():
-                if slug_val == location_slug:
-                    city_display_name = name.capitalize()
-                    break
-
-            event_message_lines: List[str] = [
-                f"<b>🎉 Ближайшие события в г. {html.escape(city_display_name)}:</b>"
-            ]
-            for i, event_data in enumerate(kudago_result):
-                title: str = html.escape(event_data.get("title", "Без заголовка"))
-                site_url: str = event_data.get("site_url", "#")
-                # Очищаем и обрезаем описание для краткости в рассылке
-                description_raw: str = event_data.get("description", "")
-                description: str = html.unescape(
-                    description_raw.replace("<p>", "")
-                    .replace("</p>", "")
-                    .replace("<br>", "\n")
-                ).strip()
-
-                event_str: str = f"{i+1}. <a href='{site_url}'>{title}</a>"
-                if description:
-                    max_desc_len = 70  # Короткое описание для рассылки
-                    if len(description) > max_desc_len:
-                        description = description[:max_desc_len] + "..."
-                    event_str += f"\n   <i>{html.escape(description)}</i>"
-                event_message_lines.append(event_str)
-
-            event_message_text: str = "\n\n".join(event_message_lines)
-
-            # Рассылаем сформированное сообщение всем подписчикам этого города
-            for telegram_id in user_telegram_ids:
-                try:
-                    await bot.send_message(
-                        chat_id=telegram_id,
-                        text=event_message_text,
-                        disable_web_page_preview=True,
-                        parse_mode=ParseMode.HTML,
-                    )
-                    logger.info(
-                        f"Успешно отправлены события пользователю {telegram_id} для города {city_display_name}."
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Ошибка при отправке событий пользователю {telegram_id} для города {city_display_name}: {e}",
-                        exc_info=True,
-                    )
+        db_session.commit()
 
     logger.info("APScheduler: Задача send_events_updates завершена.")

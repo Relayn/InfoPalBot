@@ -1,0 +1,13 @@
+services:
+  app:
+    build: .
+    container_name: infopalbot_app
+    env_file:
+      - .env
+    restart: always
+    volumes:
+      - ./app/database:/app/database
+
+networks:
+  default:
+    driver: bridge 

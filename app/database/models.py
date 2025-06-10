@@ -51,7 +51,7 @@ class Subscription(SQLModel, table=True):
         id (Optional[int]): Первичный ключ, автоинкрементный ID в базе данных.
         user_id (Optional[int]): Внешний ключ к таблице User. Индексируется для быстрого поиска.
         info_type (str): Тип информации (например, "weather", "news", "events"). Индексируется.
-        frequency (str): Частота уведомлений (например, "daily", "hourly").
+        frequency (int): Частота уведомлений в часах (например, 3, 6, 12, 24).
         details (Optional[str]): Дополнительные детали подписки (например, город для погоды/событий).
         status (str): Статус подписки ("active" или "inactive"). По умолчанию "active".
         created_at (datetime): Время создания подписки в UTC. Устанавливается автоматически.
@@ -67,15 +67,16 @@ class Subscription(SQLModel, table=True):
     info_type: str = Field(
         index=True
     )  # Тип информации (например, "weather", "news", "events")
-    frequency: (
-        str  # Частота уведомлений (например, "daily", "hourly"). Может быть Enum.
-    )
+    frequency: int  # Частота уведомлений в часах (например, 3, 6, 12, 24)
     details: Optional[str] = (
         None  # Дополнительные детали подписки (например, город для погоды/событий, категория новостей)
     )
     status: str = (
         "active"  # Статус подписки (например, "active", "inactive"). Может быть Enum.
     )
+    last_sent_at: Optional[datetime] = Field(
+        default=None
+    )  # Время последней отправки уведомления в UTC
 
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)

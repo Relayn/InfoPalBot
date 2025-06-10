@@ -102,22 +102,43 @@ dp = Dispatcher()
 class SubscriptionStates(StatesGroup):
     """
     Состояния для конечного автомата (FSM) управления процессом подписки пользователя.
-    
+
     Состояния используются для управления многошаговым процессом подписки:
     1. choosing_info_type: Пользователь выбирает тип информации (погода, новости, события)
     2. entering_city_weather: Пользователь вводит город для подписки на погоду
     3. entering_city_events: Пользователь вводит город для подписки на события
-    
+    4. choosing_frequency: Пользователь выбирает частоту рассылки
+
     Note:
         - Состояния используются в обработчиках команд и сообщений
         - Переход между состояниями происходит через FSMContext
         - Состояния очищаются после завершения процесса или отмены
     """
 
-    choosing_info_type = State()  # Пользователь выбирает тип информации (погода, новости, события)
+    choosing_info_type = (
+        State()
+    )  # Пользователь выбирает тип информации (погода, новости, события)
     entering_city_weather = State()  # Пользователь вводит город для подписки на погоду
     entering_city_events = State()  # Пользователь вводит город для подписки на события
-    # choosing_frequency = State()  # Потенциальное состояние для выбора частоты рассылки
+    choosing_frequency = State()  # Пользователь выбирает частоту рассылки
+
+
+def get_frequency_keyboard() -> InlineKeyboardMarkup:
+    """
+    Создает и возвращает inline-клавиатуру для выбора частоты уведомлений.
+    """
+    buttons = [
+        [
+            InlineKeyboardButton(text="Раз в 3 часа", callback_data="frequency:3"),
+            InlineKeyboardButton(text="Раз в 6 часов", callback_data="frequency:6"),
+        ],
+        [
+            InlineKeyboardButton(text="Раз в 12 часов", callback_data="frequency:12"),
+            InlineKeyboardButton(text="Раз в 24 часа", callback_data="frequency:24"),
+        ],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="subscribe_fsm_cancel")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def log_user_action(
@@ -125,12 +146,12 @@ def log_user_action(
 ):
     """
     Вспомогательная функция для создания записи в логе базы данных о действии пользователя.
-    
+
     Функция:
     1. Находит пользователя в БД по его Telegram ID
     2. Создает запись в логе с информацией о действии
     3. Обрабатывает возможные ошибки без прерывания основного потока
-    
+
     Args:
         db_session (Session): Активная сессия базы данных SQLModel.
         telegram_id (int): Telegram ID пользователя, совершившего действие.
@@ -139,7 +160,7 @@ def log_user_action(
         details (Optional[str]): Дополнительные детали действия
                                 (например, аргументы команды, результат).
                                 По умолчанию None.
-    
+
     Note:
         - Если пользователь не найден в БД, запись в лог все равно создается
         - Ошибки при записи в лог логируются, но не прерывают основное действие
@@ -147,7 +168,9 @@ def log_user_action(
     """
     # Пытаемся найти пользователя в БД по его Telegram ID, чтобы связать лог с внутренним user_id
     user = get_user_by_telegram_id(session=db_session, telegram_id=telegram_id)
-    user_db_id: Optional[int] = user.id if user else None  # Если пользователь найден, используем его ID, иначе None
+    user_db_id: Optional[int] = (
+        user.id if user else None
+    )  # Если пользователь найден, используем его ID, иначе None
 
     try:
         # Создаем запись в логе
@@ -173,17 +196,17 @@ def log_user_action(
 async def cmd_cancel_any_state(message: types.Message, state: FSMContext):
     """
     Обрабатывает команду /cancel в любом состоянии FSM (или без состояния).
-    
+
     Функция:
     1. Отменяет текущее многошаговое действие пользователя
     2. Очищает состояние FSM
     3. Удаляет клавиатуру
     4. Логирует действие в БД
-    
+
     Args:
         message (types.Message): Объект сообщения от пользователя.
         state (FSMContext): Контекст конечного автомата для управления состояниями.
-    
+
     Note:
         - Команда работает в любом состоянии FSM
         - Если состояние отсутствует, пользователь получает соответствующее сообщение
@@ -215,17 +238,17 @@ async def cmd_cancel_any_state(message: types.Message, state: FSMContext):
 async def process_start_command(message: types.Message, state: FSMContext):
     """
     Обрабатывает команду /start.
-    
+
     Функция:
     1. Приветствует пользователя
     2. Регистрирует его в системе (если новый)
     3. Сбрасывает любое активное состояние FSM
     4. Логирует действие в БД
-    
+
     Args:
         message (types.Message): Объект сообщения от пользователя.
         state (FSMContext): Контекст конечного автомата для управления состояниями.
-    
+
     Note:
         - Команда работает в любом состоянии FSM
         - Приветственное сообщение включает имя пользователя
@@ -238,7 +261,9 @@ async def process_start_command(message: types.Message, state: FSMContext):
     )
     await state.clear()  # Важно сбрасывать состояние при /start
 
-    db_user_internal_id: Optional[int] = None  # Для логирования ошибки, если пользователь еще не создан
+    db_user_internal_id: Optional[int] = (
+        None  # Для логирования ошибки, если пользователь еще не создан
+    )
     log_command: str = "/start"
     log_details: Optional[str] = "User started/restarted the bot"
 
@@ -303,7 +328,7 @@ async def process_help_command(message: types.Message):
     await message.answer(help_text)
     logger.info(f"Отправлена справка по команде /help пользователю {telegram_id}")
     # Логируем действие
-    with next(get_session()) as db_session:
+    with get_session() as db_session:
         log_user_action(db_session, telegram_id, "/help")
 
 
@@ -321,7 +346,7 @@ async def process_weather_command(message: types.Message, command: CommandObject
     log_details: str = "N/A"  # Будет перезаписано
 
     try:
-        with next(get_session()) as db_session:
+        with get_session() as db_session:
             if not city_name_arg:
                 # Если город не указан, отправляем инструкцию
                 await message.reply("Пожалуйста, укажите название города...")
@@ -469,7 +494,7 @@ async def process_news_command(message: types.Message):
     log_command: str = "/news"
     log_status_details: str = "unknown_error"  # Статус выполнения для лога
     try:
-        with next(get_session()) as db_session:
+        with get_session() as db_session:
             # Получаем новости через API клиент
             articles_or_error: Optional[List[Dict[str, Any]]] | Dict[str, Any] = (
                 await get_top_headlines(country="ru", page_size=5)
@@ -564,7 +589,7 @@ async def process_events_command(message: types.Message, command: CommandObject)
     log_details: str = "N/A"  # Значение по умолчанию
 
     try:
-        with next(get_session()) as db_session:
+        with get_session() as db_session:
             if not city_arg:
                 await message.reply(
                     "Пожалуйста, укажите город...\nДоступные города: Москва, Санкт-Петербург..."
@@ -694,7 +719,22 @@ async def process_subscribe_command_start(message: types.Message, state: FSMCont
     Устанавливает начальное состояние FSM.
     """
     telegram_id: int = message.from_user.id
-    with next(get_session()) as db_session:
+    with get_session() as db_session:
+        # Проверяем, не достиг ли пользователь лимита подписок
+        user = get_user_by_telegram_id(session=db_session, telegram_id=telegram_id)
+        if user and len(user.subscriptions) >= 3:
+            await message.answer(
+                "У вас уже 3 активных подписки. Это максимальное количество.\n"
+                "Вы можете удалить одну из существующих подписок с помощью /unsubscribe."
+            )
+            log_user_action(
+                db_session,
+                telegram_id,
+                "/subscribe",
+                "Subscription limit reached",
+            )
+            return
+
         log_user_action(
             db_session, telegram_id, "/subscribe", "Start subscription process"
         )
@@ -740,70 +780,73 @@ async def process_info_type_choice(
     callback_query: types.CallbackQuery, state: FSMContext
 ):
     """
-    Обрабатывает выбор типа информации пользователем в процессе подписки.
-    Переводит в следующее состояние FSM (ввод города) или завершает подписку (для новостей).
+    Обрабатывает выбор типа информации (погода, новости, события) на первом шаге подписки.
+
+    Функция:
+    1. Получает выбранный тип информации из callback_data.
+    2. Сохраняет тип в FSM.
+    3. В зависимости от типа:
+        - Для новостей: переходит к выбору частоты.
+        - Для погоды/событий: запрашивает город у пользователя.
+    4. Логирует действие пользователя.
+
+    Args:
+        callback_query (types.CallbackQuery): Объект callback-запроса от кнопки.
+        state (FSMContext): Контекст конечного автомата.
     """
-    await callback_query.answer()  # Отвечаем на callback, чтобы убрать "часики"
-    selected_type: str = callback_query.data.split(":")[1]
-    telegram_id: int = callback_query.from_user.id
-    log_details: str = f"Type chosen: {selected_type}"
+    telegram_id = callback_query.from_user.id
+    # Извлекаем тип информации из callback_data (например, "subscribe_type:weather" -> "weather")
+    info_type = callback_query.data.split(":")[1]
+    logger.info(f"Пользователь {telegram_id} выбрал тип подписки: {info_type}")
 
-    await state.update_data(info_type=selected_type)  # Сохраняем выбранный тип в FSM
+    await state.update_data(info_type=info_type)
 
-    with next(get_session()) as db_session:
-        log_user_action(db_session, telegram_id, "subscribe_type_selected", log_details)
+    with get_session() as db_session:
+        log_user_action(
+            db_session,
+            telegram_id,
+            "subscribe_type_selected",
+            f"Type chosen: {info_type}",
+        )
 
-        if selected_type == INFO_TYPE_WEATHER:
-            await callback_query.message.edit_text(
-                "Вы выбрали 'Погода'.\nПожалуйста, введите название города..."
+        # Проверяем, есть ли уже активная подписка такого типа (без города)
+        # Это актуально для новостей, где подписка не зависит от города.
+        if info_type == INFO_TYPE_NEWS:
+            existing_sub = get_subscription_by_user_and_type(
+                session=db_session,
+                user_id=get_user_by_telegram_id(
+                    session=db_session, telegram_id=telegram_id
+                ).id,
+                info_type=info_type,
             )
-            await state.set_state(SubscriptionStates.entering_city_weather)
-        elif selected_type == INFO_TYPE_EVENTS:
-            await callback_query.message.edit_text(
-                "Вы выбрали 'События'.\nПожалуйста, введите название города (например, Москва, спб)."
-            )
-            await state.set_state(SubscriptionStates.entering_city_events)
-        elif (
-            selected_type == INFO_TYPE_NEWS
-        ):  # Для новостей (пока только Россия) город не нужен
-            frequency: str = "daily"  # Частота по умолчанию
-            db_user = create_user_if_not_exists(db_session, telegram_id)
-            existing_subscription = get_subscription_by_user_and_type(
-                db_session, db_user.id, INFO_TYPE_NEWS
-            )
-            if existing_subscription:
+            if existing_sub and existing_sub.status == "active":
                 await callback_query.message.edit_text(
-                    "Вы уже подписаны на 'Новости (Россия)'."
+                    "Вы уже подписаны на 'Новости'.\n"
+                    "Для управления подписками используйте /mysubscriptions."
                 )
-                log_user_action(
-                    db_session,
-                    telegram_id,
-                    "subscribe_attempt_duplicate",
-                    f"Type: {INFO_TYPE_NEWS}",
-                )
-            else:
-                create_subscription(db_session, db_user.id, INFO_TYPE_NEWS, frequency)
-                log_user_action(
-                    db_session,
-                    telegram_id,
-                    "subscribe_confirm",
-                    f"Type: {INFO_TYPE_NEWS}, Freq: {frequency}",
-                )
-                await callback_query.message.edit_text(
-                    f"Вы успешно подписались на 'Новости (Россия)' с частотой '{frequency}'."
-                )
-            await state.clear()  # Завершаем FSM для новостей
-        else:  # Неожиданный тип информации
-            log_user_action(
-                db_session,
-                telegram_id,
-                "subscribe_error_type",
-                f"Unknown type: {selected_type}",
-            )
-            await callback_query.message.edit_text(
-                "Произошла ошибка выбора типа. Пожалуйста, попробуйте снова."
-            )
-            await state.clear()
+                await state.clear()
+                return
+
+    # В зависимости от типа информации, переходим к следующему шагу
+    if info_type == INFO_TYPE_WEATHER:
+        await callback_query.message.edit_text(
+            "Вы выбрали 'Погода'.\nПожалуйста, введите название города..."
+        )
+        await state.set_state(SubscriptionStates.entering_city_weather)
+    elif info_type == INFO_TYPE_EVENTS:
+        await callback_query.message.edit_text(
+            "Вы выбрали 'События'.\nПожалуйста, введите название города (например, Москва, спб)."
+        )
+        await state.set_state(SubscriptionStates.entering_city_events)
+    elif info_type == INFO_TYPE_NEWS:
+        # Для новостей город не нужен, сразу переходим к выбору частоты
+        await callback_query.message.edit_text(
+            "Вы выбрали 'Новости'.\nТеперь выберите частоту уведомлений:",
+            reply_markup=get_frequency_keyboard(),
+        )
+        await state.set_state(SubscriptionStates.choosing_frequency)
+
+    await callback_query.answer()
 
 
 @dp.callback_query(
@@ -816,7 +859,7 @@ async def callback_fsm_cancel_process(
     Обрабатывает нажатие кнопки "Отмена" в диалоге выбора типа подписки.
     """
     telegram_id: int = callback_query.from_user.id
-    with next(get_session()) as db_session:
+    with get_session() as db_session:
         log_user_action(
             db_session,
             telegram_id,
@@ -836,53 +879,56 @@ async def process_city_for_weather_subscription(
     message: types.Message, state: FSMContext
 ):
     """
-    Обрабатывает ввод города пользователем для подписки на погоду.
-    Проверяет на дубликат и создает подписку.
+    Обрабатывает ввод города для подписки на погоду.
+
+    Функция:
+    1. Проверяет, что введен непустой город.
+    2. Проверяет, нет ли у пользователя уже активной подписки на этот город.
+    3. Если всё хорошо, сохраняет город в FSM и переходит к выбору частоты.
+    4. Если город невалиден или подписка уже есть, информирует пользователя.
+
+    Args:
+        message (types.Message): Объект сообщения от пользователя.
+        state (FSMContext): Контекст конечного автомата.
     """
-    city_name: str = message.text.strip()
-    telegram_id: int = message.from_user.id
-    user_data: Dict[str, Any] = await state.get_data()
-    info_type: str = user_data.get(
-        "info_type", INFO_TYPE_WEATHER
-    )  # Получаем тип из состояния
-    log_details: str = f"Type: {info_type}, City input: {city_name}"
+    telegram_id = message.from_user.id
+    city_name = message.text.strip()
 
-    with next(get_session()) as db_session:
-        if not city_name:  # Проверка на пустое сообщение
-            await message.reply("Название города не может быть пустым...")
-            log_user_action(
-                db_session, telegram_id, "subscribe_city_empty", f"Type: {info_type}"
-            )
-            return  # Остаемся в текущем состоянии, ожидая корректного ввода
+    if not city_name:
+        await message.reply("Название города не может быть пустым...")
+        # Состояние не меняем, даем пользователю попробовать снова
+        return
 
-        logger.info(
-            f"Пользователь {telegram_id} ввел город '{city_name}' для подписки на '{info_type}'."
-        )
-        frequency: str = "daily"  # Частота по умолчанию
-        db_user = create_user_if_not_exists(db_session, telegram_id)
-        existing_subscription = get_subscription_by_user_and_type(
-            db_session, db_user.id, info_type, city_name
-        )
+    # Проверяем, есть ли уже подписка на погоду для этого города
+    with get_session() as db_session:
+        user = get_user_by_telegram_id(session=db_session, telegram_id=telegram_id)
+        if user:
+            existing_sub = get_subscription_by_user_and_type(
+                session=db_session,
+                user_id=user.id,
+                info_type=INFO_TYPE_WEATHER,
+                details=city_name,
+            )
+            if existing_sub and existing_sub.status == "active":
+                await message.answer(
+                    f"Вы уже подписаны на '{INFO_TYPE_WEATHER}' для города '{html.escape(city_name)}'."
+                )
+                log_user_action(
+                    db_session,
+                    telegram_id,
+                    "subscribe_attempt_duplicate",
+                    f"Type: {INFO_TYPE_WEATHER}, City input: {city_name}",
+                )
+                await state.clear()
+                return
 
-        if existing_subscription:
-            await message.answer(
-                f"Вы уже подписаны на '{info_type}' для города '{html.escape(city_name)}'."
-            )
-            log_user_action(
-                db_session, telegram_id, "subscribe_attempt_duplicate", log_details
-            )
-        else:
-            create_subscription(db_session, db_user.id, info_type, frequency, city_name)
-            log_user_action(
-                db_session,
-                telegram_id,
-                "subscribe_confirm",
-                f"Type: {info_type}, City: {city_name}, Freq: {frequency}",
-            )
-            await message.answer(
-                f"Вы успешно подписались на '{info_type}' для города '{html.escape(city_name)}' с частотой '{frequency}'."
-            )
-        await state.clear()  # Завершаем FSM
+    # Если всё в порядке, сохраняем город и переходим к выбору частоты
+    await state.update_data(details=city_name)
+    await message.answer(
+        f"Город '{html.escape(city_name)}' принят.\nТеперь выберите частоту уведомлений:",
+        reply_markup=get_frequency_keyboard(),
+    )
+    await state.set_state(SubscriptionStates.choosing_frequency)
 
 
 @dp.message(StateFilter(SubscriptionStates.entering_city_events), F.text)
@@ -890,69 +936,139 @@ async def process_city_for_events_subscription(
     message: types.Message, state: FSMContext
 ):
     """
-    Обрабатывает ввод города пользователем для подписки на события.
-    Проверяет поддержку города, наличие дубликата и создает подписку.
-    """
-    city_arg: str = message.text.strip()
-    telegram_id: int = message.from_user.id
-    user_data: Dict[str, Any] = await state.get_data()
-    info_type: str = user_data.get(
-        "info_type", INFO_TYPE_EVENTS
-    )  # Получаем тип из состояния
-    log_details: str = f"Type: {info_type}, City input: {city_arg}"
+    Обрабатывает ввод города для подписки на события.
 
-    with next(get_session()) as db_session:
-        if not city_arg:
-            await message.reply("Название города не может быть пустым...")
+    Функция:
+    1. Проверяет, поддерживается ли введенный город (есть ли он в KUDAGO_LOCATION_SLUGS).
+    2. Проверяет, нет ли у пользователя уже активной подписки на этот город (по slug).
+    3. Если всё хорошо, сохраняет город и его slug в FSM, переходит к выбору частоты.
+    4. Если город невалиден или подписка уже есть, информирует пользователя.
+
+    Args:
+        message (types.Message): Объект сообщения от пользователя.
+        state (FSMContext): Контекст конечного автомата.
+    """
+    telegram_id = message.from_user.id
+    city_name = message.text.strip()
+    location_slug = KUDAGO_LOCATION_SLUGS.get(city_name.lower())
+
+    if not location_slug:
+        supported_cities = ", ".join(
+            [city.capitalize() for city in KUDAGO_LOCATION_SLUGS.keys()]
+        )
+        await message.reply(
+            f"К сожалению, не знаю событий для города '{html.escape(city_name)}'...\n"
+            f"Попробуйте: {supported_cities}..."
+        )
+        with get_session() as db_session:
             log_user_action(
-                db_session, telegram_id, "subscribe_city_empty", f"Type: {info_type}"
+                db_session,
+                telegram_id,
+                "subscribe_city_unsupported",
+                f"Type: {INFO_TYPE_EVENTS}, City input: {city_name}",
             )
+        # Состояние не меняем, даем пользователю попробовать снова
+        return
+
+    # Проверяем, есть ли уже подписка на события для этого города (slug)
+    with get_session() as db_session:
+        user = get_user_by_telegram_id(session=db_session, telegram_id=telegram_id)
+        if user:
+            existing_sub = get_subscription_by_user_and_type(
+                session=db_session,
+                user_id=user.id,
+                info_type=INFO_TYPE_EVENTS,
+                details=location_slug,
+            )
+            if existing_sub and existing_sub.status == "active":
+                await message.answer(
+                    f"Вы уже подписаны на '{INFO_TYPE_EVENTS}' для города '{html.escape(city_name)}'."
+                )
+                log_user_action(
+                    db_session,
+                    telegram_id,
+                    "subscribe_attempt_duplicate",
+                    f"Type: {INFO_TYPE_EVENTS}, City input: {city_name}, slug: {location_slug}",
+                )
+                await state.clear()
+                return
+
+    # Если всё в порядке, сохраняем город и slug, переходим к выбору частоты
+    await state.update_data(details=location_slug)
+    await message.answer(
+        f"Город '{html.escape(city_name)}' принят.\nТеперь выберите частоту уведомлений:",
+        reply_markup=get_frequency_keyboard(),
+    )
+    await state.set_state(SubscriptionStates.choosing_frequency)
+
+
+@dp.callback_query(
+    StateFilter(SubscriptionStates.choosing_frequency), F.data.startswith("frequency:")
+)
+async def process_frequency_choice(
+    callback_query: types.CallbackQuery, state: FSMContext
+):
+    """
+    Обрабатывает выбор частоты уведомлений и завершает процесс подписки.
+    """
+    telegram_id = callback_query.from_user.id
+    try:
+        frequency_hours = int(callback_query.data.split(":")[1])
+    except (ValueError, IndexError):
+        logger.warning(
+            f"Некорректный callback для частоты от {telegram_id}: {callback_query.data}"
+        )
+        await callback_query.answer("Произошла ошибка, попробуйте снова.")
+        return
+
+    user_data = await state.get_data()
+    info_type = user_data.get("info_type")
+    details = user_data.get("details")
+
+    with get_session() as db_session:
+        user = get_user_by_telegram_id(session=db_session, telegram_id=telegram_id)
+        if not user:
+            logger.error(f"Не удалось найти пользователя {telegram_id} в БД.")
+            await callback_query.message.edit_text(
+                "Произошла ошибка: пользователь не найден. Пожалуйста, попробуйте /start."
+            )
+            await state.clear()
             return
 
-        location_slug: Optional[str] = KUDAGO_LOCATION_SLUGS.get(city_arg.lower())
-        if not location_slug:
-            await message.reply(
-                f"К сожалению, не знаю событий для города '{html.escape(city_arg)}'...\nПопробуйте: Москва, Санкт-Петербург..."
-            )
-            log_user_action(
-                db_session, telegram_id, "subscribe_city_unsupported", log_details
-            )
-            return  # Остаемся в состоянии для повторного ввода или отмены
-
-        log_details += f", slug: {location_slug}"
-        logger.info(
-            f"Пользователь {telegram_id} ввел город '{city_arg}' (slug: {location_slug}) для подписки на '{info_type}'."
-        )
-        frequency: str = "daily"  # Частота по умолчанию
-        db_user = create_user_if_not_exists(db_session, telegram_id)
-        existing_subscription = get_subscription_by_user_and_type(
-            db_session, db_user.id, info_type, location_slug
-        )
-
-        if existing_subscription:
-            await message.answer(
-                f"Вы уже подписаны на '{info_type}' для города '{html.escape(city_arg)}'."
-            )
-            log_user_action(
-                db_session, telegram_id, "subscribe_attempt_duplicate", log_details
-            )
-        else:
+        try:
             create_subscription(
-                db_session, db_user.id, info_type, frequency, location_slug
+                session=db_session,
+                user_id=user.id,
+                info_type=info_type,
+                frequency=frequency_hours,
+                details=details,
             )
             log_user_action(
                 db_session,
                 telegram_id,
-                "subscribe_confirm",
-                f"Type: {info_type}, City: {city_arg} (slug: {location_slug}), Freq: {frequency}",
+                "subscribe_finish",
+                f"Type: {info_type}, Freq: {frequency_hours}h, Details: {details}",
             )
-            await message.answer(
-                f"Вы успешно подписались на '{info_type}' для города '{html.escape(city_arg)}' с частотой '{frequency}'."
+            logger.info(
+                f"Пользователь {telegram_id} успешно подписался на {info_type} с частотой {frequency_hours}ч."
             )
-        await state.clear()  # Завершаем FSM
 
+            await callback_query.message.edit_text(
+                f"Вы успешно подписались на '{info_type}' с частотой раз в {frequency_hours} часа(ов)!\n"
+                "Используйте /mysubscriptions для просмотра ваших подписок."
+            )
 
-# --- КОМАНДЫ УПРАВЛЕНИЯ ПОДПИСКАМИ ---
+        except Exception as e:
+            logger.error(
+                f"Ошибка создания подписки для пользователя {telegram_id}: {e}",
+                exc_info=True,
+            )
+            await callback_query.message.edit_text(
+                "Произошла ошибка при создании подписки. Попробуйте позже."
+            )
+
+    await state.clear()
+    await callback_query.answer()
 
 
 @dp.message(Command("mysubscriptions"))
@@ -967,7 +1083,7 @@ async def process_mysubscriptions_command(message: types.Message):
         None  # По умолчанию нет деталей, если нет ошибок/особых случаев
     )
 
-    with next(get_session()) as db_session:
+    with get_session() as db_session:
         db_user = get_user_by_telegram_id(session=db_session, telegram_id=telegram_id)
         if not db_user:
             await message.answer("Не удалось найти информацию о вас...")
@@ -987,9 +1103,7 @@ async def process_mysubscriptions_command(message: types.Message):
         response_lines: List[str] = ["<b>📋 Ваши активные подписки:</b>"]
         for i, sub in enumerate(subscriptions):
             sub_details_str: str = ""
-            freq_str: str = html.escape(
-                sub.frequency or "ежедн."
-            )  # Частота по умолчанию
+            freq_str: str = html.escape(str(sub.frequency) or "ежедн.")
             if sub.info_type == INFO_TYPE_WEATHER:
                 sub_details_str = f"Погода для города: <b>{html.escape(sub.details or 'Не указан')}</b>"
             elif sub.info_type == INFO_TYPE_NEWS:
@@ -1026,7 +1140,7 @@ async def process_unsubscribe_command_start(
     telegram_id: int = message.from_user.id
     log_details: str = "Start unsubscribe process"
 
-    with next(get_session()) as db_session:
+    with get_session() as db_session:
         log_user_action(db_session, telegram_id, "/unsubscribe", log_details)
         db_user = get_user_by_telegram_id(session=db_session, telegram_id=telegram_id)
         if not db_user:
@@ -1050,7 +1164,7 @@ async def process_unsubscribe_command_start(
         keyboard_buttons: List[List[InlineKeyboardButton]] = []
         for sub in subscriptions:
             sub_details_str: str = ""
-            freq_str: str = html.escape(sub.frequency or "ежедн.")
+            freq_str: str = html.escape(str(sub.frequency) or "ежедн.")
             if sub.info_type == INFO_TYPE_WEATHER:
                 sub_details_str = f"Погода: {html.escape(sub.details or 'Город?')}"
             elif sub.info_type == INFO_TYPE_NEWS:
@@ -1106,7 +1220,7 @@ async def process_unsubscribe_confirm(
     telegram_id: int = callback_query.from_user.id
     log_details: str = f"Subscription ID to delete: {subscription_id_to_delete}"
 
-    with next(get_session()) as db_session:
+    with get_session() as db_session:
         db_user = get_user_by_telegram_id(session=db_session, telegram_id=telegram_id)
         if not db_user:
             await callback_query.message.edit_text("Ошибка: пользователь не найден.")
@@ -1156,7 +1270,7 @@ async def process_unsubscribe_action_cancel(
     Обрабатывает нажатие кнопки "Отменить операцию" в диалоге отписки.
     """
     telegram_id: int = callback_query.from_user.id
-    with next(get_session()) as db_session:
+    with get_session() as db_session:
         log_user_action(db_session, telegram_id, "unsubscribe_action_cancel")
     await callback_query.answer()
     await callback_query.message.edit_text("Операция отписки отменена.")

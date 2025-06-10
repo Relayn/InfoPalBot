@@ -22,6 +22,7 @@
         users = session.query(User).all()
 """
 
+from contextlib import contextmanager
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from sqlmodel import create_engine, SQLModel, Session  # Импортируем необходимые классы
@@ -92,6 +93,7 @@ def create_db_and_tables():
     print("База данных и таблицы проверены/созданы.")  # Вывод в консоль
 
 
+@contextmanager
 def get_session():
     """
     Генератор зависимостей для получения сессии базы данных.
@@ -110,5 +112,8 @@ def get_session():
         - Сессия автоматически закрывается после использования
         - Поддерживает транзакции и откат изменений при ошибках
     """
-    with Session(engine) as session:
+    session = Session(engine)
+    try:
         yield session
+    finally:
+        session.close()

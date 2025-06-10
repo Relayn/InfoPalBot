@@ -1,4 +1,4 @@
-import pytest # pytest остается
+import pytest  # pytest остается
 import httpx
 import html
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
@@ -11,6 +11,7 @@ from app.database.models import Log, User as DBUser
 from app.database.crud import create_user
 from aiogram.types import Message, User as AiogramUser, Chat
 from aiogram.filters import CommandObject
+
 
 @pytest.mark.asyncio
 async def test_weather_command_successful_flow(integration_session: Session):
@@ -25,7 +26,9 @@ async def test_weather_command_successful_flow(integration_session: Session):
 
     # Мок сообщения от пользователя
     mock_message = AsyncMock(spec=Message)
-    mock_message.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id, full_name="Test User")
+    mock_message.from_user = MagicMock(
+        spec=AiogramUser, id=telegram_user_id, full_name="Test User"
+    )
     mock_message.chat = MagicMock(spec=Chat, id=telegram_user_id)
     mock_message.reply = AsyncMock()
     mock_message.answer = AsyncMock()
@@ -41,7 +44,7 @@ async def test_weather_command_successful_flow(integration_session: Session):
         "weather": [{"description": "ясно"}],
         "main": {"temp": 25.0, "feels_like": 24.0, "humidity": 60},
         "wind": {"speed": 5.0, "deg": 90},  # deg 90 = Восточный
-        "name": "Moscow"
+        "name": "Moscow",
     }
 
     # 2. Патчинг
@@ -55,26 +58,37 @@ async def test_weather_command_successful_flow(integration_session: Session):
 
     mock_session_context_manager = MagicMock()
     mock_session_context_manager.__enter__.return_value = integration_session
-    mock_session_context_manager.__exit__ = MagicMock(return_value=None)
-    mock_generator = MagicMock()
-    mock_generator.__next__.return_value = mock_session_context_manager  # Для with next(get_session())
+    mock_session_context_manager.__exit__.return_value = None
 
-    with patch('app.api_clients.weather.httpx.AsyncClient') as MockAsyncWeatherClient, \
-            patch('app.bot.main.get_session', return_value=mock_generator):
+    with patch(
+        "app.api_clients.weather.httpx.AsyncClient"
+    ) as MockAsyncWeatherClient, patch(
+        "app.bot.main.get_session", return_value=mock_session_context_manager
+    ):
         mock_weather_client_instance = AsyncMock()
         mock_weather_client_instance.get.return_value = mock_httpx_response
-        MockAsyncWeatherClient.return_value.__aenter__.return_value = mock_weather_client_instance
+        MockAsyncWeatherClient.return_value.__aenter__.return_value = (
+            mock_weather_client_instance
+        )
 
         # 3. Вызов тестируемой функции (обработчика команды)
         await process_weather_command(mock_message, mock_command_obj)
 
     # 4. Проверки
-    mock_message.reply.assert_any_call(f"Запрашиваю погоду для города <b>{html.escape(city_name)}</b>...")
+    mock_message.reply.assert_any_call(
+        f"Запрашиваю погоду для города <b>{html.escape(city_name)}</b>..."
+    )
 
     expected_weather_api_url = "https://api.openweathermap.org/data/2.5/weather"
-    expected_weather_api_params = {"q": city_name, "appid": api_key, "units": "metric", "lang": "ru"}
-    mock_weather_client_instance.get.assert_called_once_with(expected_weather_api_url,
-                                                             params=expected_weather_api_params)
+    expected_weather_api_params = {
+        "q": city_name,
+        "appid": api_key,
+        "units": "metric",
+        "lang": "ru",
+    }
+    mock_weather_client_instance.get.assert_called_once_with(
+        expected_weather_api_url, params=expected_weather_api_params
+    )
 
     expected_response_text = (
         f"<b>Погода в городе {html.escape(mock_api_response_data['name'])}:</b>\n"
@@ -106,7 +120,9 @@ async def test_weather_command_city_not_found_flow(integration_session: Session)
     api_key = "fake_weather_key_error"
 
     mock_message = AsyncMock(spec=Message)
-    mock_message.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id, full_name="Error User")
+    mock_message.from_user = MagicMock(
+        spec=AiogramUser, id=telegram_user_id, full_name="Error User"
+    )
     mock_message.chat = MagicMock(spec=Chat, id=telegram_user_id)
     mock_message.reply = AsyncMock()
     mock_message.answer = AsyncMock()
@@ -131,28 +147,41 @@ async def test_weather_command_city_not_found_flow(integration_session: Session)
 
     mock_session_context_manager = MagicMock()
     mock_session_context_manager.__enter__.return_value = integration_session
-    mock_session_context_manager.__exit__ = MagicMock(return_value=None)
-    mock_generator = MagicMock()
-    mock_generator.__next__.return_value = mock_session_context_manager
+    mock_session_context_manager.__exit__.return_value = None
 
-    with patch('app.api_clients.weather.httpx.AsyncClient') as MockAsyncWeatherClient, \
-            patch('app.bot.main.get_session', return_value=mock_generator):
+    with patch(
+        "app.api_clients.weather.httpx.AsyncClient"
+    ) as MockAsyncWeatherClient, patch(
+        "app.bot.main.get_session", return_value=mock_session_context_manager
+    ):
         mock_weather_client_instance = AsyncMock()
         mock_weather_client_instance.get.return_value = mock_httpx_response
-        MockAsyncWeatherClient.return_value.__aenter__.return_value = mock_weather_client_instance
+        MockAsyncWeatherClient.return_value.__aenter__.return_value = (
+            mock_weather_client_instance
+        )
 
         # 3. Вызов
         await process_weather_command(mock_message, mock_command_obj)
 
     # 4. Проверки
-    mock_message.reply.assert_any_call(f"Запрашиваю погоду для города <b>{html.escape(city_name)}</b>...")
+    mock_message.reply.assert_any_call(
+        f"Запрашиваю погоду для города <b>{html.escape(city_name)}</b>..."
+    )
 
     expected_weather_api_url = "https://api.openweathermap.org/data/2.5/weather"
-    expected_weather_api_params = {"q": city_name, "appid": api_key, "units": "metric", "lang": "ru"}
-    mock_weather_client_instance.get.assert_called_once_with(expected_weather_api_url,
-                                                             params=expected_weather_api_params)
+    expected_weather_api_params = {
+        "q": city_name,
+        "appid": api_key,
+        "units": "metric",
+        "lang": "ru",
+    }
+    mock_weather_client_instance.get.assert_called_once_with(
+        expected_weather_api_url, params=expected_weather_api_params
+    )
 
-    mock_message.reply.assert_any_call(f"Город <b>{html.escape(city_name)}</b> не найден...")
+    mock_message.reply.assert_any_call(
+        f"Город <b>{html.escape(city_name)}</b> не найден..."
+    )
     mock_message.answer.assert_not_called()
 
     log_entry = integration_session.exec(

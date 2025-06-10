@@ -29,7 +29,9 @@ async def test_events_command_api_error_flow(integration_session: Session):
     telegram_user_id = 45678
 
     mock_message = AsyncMock(spec=Message)
-    mock_message.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id, full_name="Error Events User")
+    mock_message.from_user = MagicMock(
+        spec=AiogramUser, id=telegram_user_id, full_name="Error Events User"
+    )
     mock_message.chat = MagicMock(spec=Chat, id=telegram_user_id)
     mock_message.reply = AsyncMock()
 
@@ -49,24 +51,31 @@ async def test_events_command_api_error_flow(integration_session: Session):
 
     mock_session_context_manager = MagicMock()
     mock_session_context_manager.__enter__.return_value = integration_session
-    mock_session_context_manager.__exit__ = MagicMock(return_value=None)
-    mock_generator = MagicMock()
-    mock_generator.__next__.return_value = mock_session_context_manager
+    mock_session_context_manager.__exit__.return_value = None
 
     current_timestamp = int(time.time())
 
-    with patch('app.api_clients.events.httpx.AsyncClient') as MockAsyncEventsClient, \
-            patch('app.bot.main.get_session', return_value=mock_generator), \
-            patch('app.api_clients.events.time.time', return_value=float(current_timestamp)):
+    with patch(
+        "app.api_clients.events.httpx.AsyncClient"
+    ) as MockAsyncEventsClient, patch(
+        "app.bot.main.get_session", return_value=mock_session_context_manager
+    ), patch(
+        "app.api_clients.events.time.time", return_value=float(current_timestamp)
+    ):
         mock_events_client_instance = AsyncMock()
         mock_events_client_instance.get.return_value = mock_httpx_response
-        MockAsyncEventsClient.return_value.__aenter__.return_value = mock_events_client_instance
+        MockAsyncEventsClient.return_value.__aenter__.return_value = (
+            mock_events_client_instance
+        )
 
         await process_events_command(mock_message, mock_command_obj)
 
     mock_message.reply.assert_any_call(
-        f"Запрашиваю актуальные события для города <b>{html.escape(city_argument)}</b>...")
-    mock_message.reply.assert_any_call(f"Не удалось получить события: {html.escape(error_detail_from_api)}")
+        f"Запрашиваю актуальные события для города <b>{html.escape(city_argument)}</b>..."
+    )
+    mock_message.reply.assert_any_call(
+        f"Не удалось получить события: {html.escape(error_detail_from_api)}"
+    )
 
     log_entry = integration_session.exec(
         select(Log).where(Log.command == "/events").where(Log.user_id == db_user.id)
@@ -86,7 +95,9 @@ async def test_events_command_no_events_found_flow(integration_session: Session)
     telegram_user_id = 56789
 
     mock_message = AsyncMock(spec=Message)
-    mock_message.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id, full_name="No Events User")
+    mock_message.from_user = MagicMock(
+        spec=AiogramUser, id=telegram_user_id, full_name="No Events User"
+    )
     mock_message.chat = MagicMock(spec=Chat, id=telegram_user_id)
     mock_message.reply = AsyncMock()
 
@@ -102,24 +113,31 @@ async def test_events_command_no_events_found_flow(integration_session: Session)
 
     mock_session_context_manager = MagicMock()
     mock_session_context_manager.__enter__.return_value = integration_session
-    mock_session_context_manager.__exit__ = MagicMock(return_value=None)
-    mock_generator = MagicMock()
-    mock_generator.__next__.return_value = mock_session_context_manager
+    mock_session_context_manager.__exit__.return_value = None
 
     current_timestamp = int(time.time())
 
-    with patch('app.api_clients.events.httpx.AsyncClient') as MockAsyncEventsClient, \
-            patch('app.bot.main.get_session', return_value=mock_generator), \
-            patch('app.api_clients.events.time.time', return_value=float(current_timestamp)):
+    with patch(
+        "app.api_clients.events.httpx.AsyncClient"
+    ) as MockAsyncEventsClient, patch(
+        "app.bot.main.get_session", return_value=mock_session_context_manager
+    ), patch(
+        "app.api_clients.events.time.time", return_value=float(current_timestamp)
+    ):
         mock_events_client_instance = AsyncMock()
         mock_events_client_instance.get.return_value = mock_httpx_response
-        MockAsyncEventsClient.return_value.__aenter__.return_value = mock_events_client_instance
+        MockAsyncEventsClient.return_value.__aenter__.return_value = (
+            mock_events_client_instance
+        )
 
         await process_events_command(mock_message, mock_command_obj)
 
     mock_message.reply.assert_any_call(
-        f"Запрашиваю актуальные события для города <b>{html.escape(city_argument)}</b>...")
-    mock_message.reply.assert_any_call(f"Не найдено актуальных событий для города <b>{html.escape(city_argument)}</b>.")
+        f"Запрашиваю актуальные события для города <b>{html.escape(city_argument)}</b>..."
+    )
+    mock_message.reply.assert_any_call(
+        f"Не найдено актуальных событий для города <b>{html.escape(city_argument)}</b>."
+    )
 
     log_entry = integration_session.exec(
         select(Log).where(Log.command == "/events").where(Log.user_id == db_user.id)
@@ -137,7 +155,9 @@ async def test_events_command_unknown_city_flow(integration_session: Session):
     telegram_user_id = 67890
 
     mock_message = AsyncMock(spec=Message)
-    mock_message.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id, full_name="Unknown City User")
+    mock_message.from_user = MagicMock(
+        spec=AiogramUser, id=telegram_user_id, full_name="Unknown City User"
+    )
     mock_message.chat = MagicMock(spec=Chat, id=telegram_user_id)
     mock_message.reply = AsyncMock()
 
@@ -146,13 +166,16 @@ async def test_events_command_unknown_city_flow(integration_session: Session):
 
     mock_session_context_manager = MagicMock()
     mock_session_context_manager.__enter__.return_value = integration_session
-    mock_session_context_manager.__exit__ = MagicMock(return_value=None)
-    mock_generator = MagicMock()
-    mock_generator.__next__.return_value = mock_session_context_manager
+    mock_session_context_manager.__exit__.return_value = None
 
-    with patch('app.api_clients.events.httpx.AsyncClient') as MockAsyncEventsClient, \
-            patch('app.bot.main.get_session', return_value=mock_generator):
-        mock_events_client_instance = MockAsyncEventsClient.return_value.__aenter__.return_value
+    with patch(
+        "app.api_clients.events.httpx.AsyncClient"
+    ) as MockAsyncEventsClient, patch(
+        "app.bot.main.get_session", return_value=mock_session_context_manager
+    ):
+        mock_events_client_instance = (
+            MockAsyncEventsClient.return_value.__aenter__.return_value
+        )
         await process_events_command(mock_message, mock_command_obj)
 
     mock_message.reply.assert_called_once_with(
@@ -175,7 +198,9 @@ async def test_events_command_no_city_argument_flow(integration_session: Session
     telegram_user_id = 78901
 
     mock_message = AsyncMock(spec=Message)
-    mock_message.from_user = MagicMock(spec=AiogramUser, id=telegram_user_id, full_name="No Arg User")
+    mock_message.from_user = MagicMock(
+        spec=AiogramUser, id=telegram_user_id, full_name="No Arg User"
+    )
     mock_message.chat = MagicMock(spec=Chat, id=telegram_user_id)
     mock_message.reply = AsyncMock()
 
@@ -184,13 +209,16 @@ async def test_events_command_no_city_argument_flow(integration_session: Session
 
     mock_session_context_manager = MagicMock()
     mock_session_context_manager.__enter__.return_value = integration_session
-    mock_session_context_manager.__exit__ = MagicMock(return_value=None)
-    mock_generator = MagicMock()
-    mock_generator.__next__.return_value = mock_session_context_manager
+    mock_session_context_manager.__exit__.return_value = None
 
-    with patch('app.api_clients.events.httpx.AsyncClient') as MockAsyncEventsClient, \
-            patch('app.bot.main.get_session', return_value=mock_generator):
-        mock_events_client_instance = MockAsyncEventsClient.return_value.__aenter__.return_value
+    with patch(
+        "app.api_clients.events.httpx.AsyncClient"
+    ) as MockAsyncEventsClient, patch(
+        "app.bot.main.get_session", return_value=mock_session_context_manager
+    ):
+        mock_events_client_instance = (
+            MockAsyncEventsClient.return_value.__aenter__.return_value
+        )
         await process_events_command(mock_message, mock_command_obj)
 
     mock_message.reply.assert_called_once_with(
