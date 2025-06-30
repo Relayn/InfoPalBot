@@ -1,336 +1,248 @@
-"""
-Модуль, содержащий unit-тесты для асинхронных задач планировщика APScheduler.
-Тестирует функции рассылки уведомлений (погода, новости, события).
-"""
+# Файл: tests/unit/test_scheduler_tasks.py
 
 import pytest
+import html
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
-from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta, timezone
-
 from aiogram import Bot
-from aiogram.enums import ParseMode  # <-- ДОБАВЛЕНО: Импорт ParseMode для проверки
+from aiogram.exceptions import TelegramAPIError
 
+# Импортируем все тестируемые функции
 from app.scheduler.tasks import (
-    send_weather_updates,
-    send_news_updates,
-    send_events_updates,
+    send_single_notification,
+    format_weather_message,
+    format_news_message,
+    format_events_message,
 )
-from app.database.models import User as DBUser, Subscription as DBSubscription
-from app.bot.constants import (
-    INFO_TYPE_WEATHER,
-    INFO_TYPE_NEWS,
-    INFO_TYPE_EVENTS,
-    KUDAGO_LOCATION_SLUGS,
-)
-from app.database.models import (
-    User,
-)  # <-- ДОБАВЛЕНО: Импорт модели User для type hinting в моках
+from app.database.models import Subscription, User
+from app.bot.constants import INFO_TYPE_WEATHER, INFO_TYPE_NEWS, KUDAGO_LOCATION_SLUGS
 
 
-# Фикстура для мокированного экземпляра бота Aiogram
-@pytest.fixture
-def mock_bot() -> AsyncMock:
-    """
-    Предоставляет мок-объект Aiogram Bot для тестирования функций,
-    которые отправляют сообщения.
-    """
-    bot = AsyncMock(spec=Bot)
-    # Убеждаемся, что send_message также является AsyncMock
-    bot.send_message = AsyncMock()
-    return bot
+# --- НОВЫЕ ТЕСТЫ ДЛЯ ФУНКЦИЙ ФОРМАТИРОВАНИЯ ---
 
-
-# Фикстура для мокированной сессии базы данных
-@pytest.fixture
-def mock_db_session() -> MagicMock:
-    """
-    Предоставляет мок-объект сессии SQLModel для тестирования функций,
-    которые взаимодействуют с БД.
-    """
-    session = MagicMock()
-    # Мокируем метод get, который используется для получения объектов по ID
-    session.get = MagicMock()
-    return session
-
-
-# Фикстура для мокирования get_session()
-@pytest.fixture
-def mock_get_session_context(mock_db_session: MagicMock) -> MagicMock:
-    # Мок контекстного менеджера, который возвращает mock_db_session при входе
-    mock_session_cm = MagicMock()
-    mock_session_cm.__enter__.return_value = mock_db_session
-    # __exit__ тоже должен быть моком, чтобы with ... as работал
-    mock_session_cm.__exit__ = MagicMock(return_value=None)
-
-    # Патчим get_session в модуле tasks, чтобы он возвращал этот контекстный менеджер
-    # Теперь get_session() будет возвращать объект, который можно использовать в with ... as
-    # без необходимости вызова next()
-    with patch(
-        "app.scheduler.tasks.get_session", return_value=mock_session_cm
-    ) as patched_get_session:
-        yield patched_get_session
-
-
-# --- Тесты для send_weather_updates ---
 @pytest.mark.asyncio
-async def test_send_weather_updates_sends_to_subscribed_user_first_time(
-    mock_bot: AsyncMock, mock_db_session: MagicMock, mock_get_session_context: MagicMock
-):
-    """Тест: уведомление о погоде успешно отправляется, если last_sent_at is None."""
-    user = DBUser(id=1, telegram_id=12345)
-    mock_subscription = DBSubscription(
-        id=1,
-        user_id=user.id,
-        user=user,
-        info_type=INFO_TYPE_WEATHER,
-        details="Москва",
-        status="active",
-        frequency=3,
-        last_sent_at=None,
-    )
-    mock_weather_data = {
-        "weather": [{"description": "ясно"}],
-        "main": {"temp": 20.0, "feels_like": 19.5},
+@patch("app.scheduler.tasks.get_weather_data")
+async def test_format_weather_message_success(mock_get_weather):
+    """Тест: успешное форматирование сообщения о погоде."""
+    city = "Лондон"
+    mock_get_weather.return_value = {
+        "weather": [{"description": "переменная облачность"}],
+        "main": {"temp": 15.5, "feels_like": 14.0},
+        "name": "London",
     }
-
-    with patch(
-        "app.scheduler.tasks.get_active_subscriptions_by_info_type",
-        return_value=[mock_subscription],
-    ), patch(
-        "app.scheduler.tasks.get_weather_data", return_value=mock_weather_data
-    ) as mock_get_weather:
-        await send_weather_updates(mock_bot)
-
-        mock_get_weather.assert_called_once_with("Москва")
-        mock_bot.send_message.assert_called_once()
-        mock_db_session.commit.assert_called_once()
+    result = await format_weather_message(city)
+    assert result is not None
+    assert "<b>Погода в городе London:</b>" in result
+    assert "15.5°C" in result
+    assert "Переменная облачность" in result
+    mock_get_weather.assert_awaited_once_with(city)
 
 
 @pytest.mark.asyncio
-async def test_send_weather_updates_sends_when_time_is_due(
-    mock_bot: AsyncMock, mock_db_session: MagicMock, mock_get_session_context: MagicMock
-):
-    """Тест: уведомление о погоде успешно отправляется, если прошло достаточно времени."""
-    user = DBUser(id=1, telegram_id=12345)
-    mock_subscription = DBSubscription(
-        id=1,
-        user_id=user.id,
-        user=user,
-        info_type=INFO_TYPE_WEATHER,
-        details="Москва",
-        status="active",
-        frequency=3,
-        last_sent_at=datetime.now(timezone.utc) - timedelta(hours=4),
-    )
-    mock_weather_data = {
-        "weather": [{"description": "ясно"}],
-        "main": {"temp": 20.0, "feels_like": 19.5},
-    }
-
-    with patch(
-        "app.scheduler.tasks.get_active_subscriptions_by_info_type",
-        return_value=[mock_subscription],
-    ), patch("app.scheduler.tasks.get_weather_data", return_value=mock_weather_data):
-        await send_weather_updates(mock_bot)
-        mock_bot.send_message.assert_called_once()
-        mock_db_session.commit.assert_called_once()
+@patch("app.scheduler.tasks.get_weather_data")
+async def test_format_weather_message_api_error(mock_get_weather):
+    """Тест: форматирование погоды при ошибке от API."""
+    city = "НесуществующийГород"
+    mock_get_weather.return_value = {"error": True, "message": "city not found"}
+    result = await format_weather_message(city)
+    assert result is None
+    mock_get_weather.assert_awaited_once_with(city)
 
 
 @pytest.mark.asyncio
-async def test_send_weather_updates_does_not_send_when_time_not_due(
-    mock_bot: AsyncMock, mock_db_session: MagicMock, mock_get_session_context: MagicMock
-):
-    """Тест: уведомление о погоде НЕ отправляется, если прошло недостаточно времени."""
-    user = DBUser(id=1, telegram_id=12345)
-    mock_subscription = DBSubscription(
-        id=1,
-        user_id=user.id,
-        user=user,
-        info_type=INFO_TYPE_WEATHER,
-        details="Москва",
-        status="active",
-        frequency=3,
-        last_sent_at=datetime.now(timezone.utc) - timedelta(hours=2),
-    )
-
-    with patch(
-        "app.scheduler.tasks.get_active_subscriptions_by_info_type",
-        return_value=[mock_subscription],
-    ):
-        await send_weather_updates(mock_bot)
-        mock_bot.send_message.assert_not_called()
-        mock_db_session.commit.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_send_weather_updates_no_active_subscriptions(
-    mock_bot: AsyncMock, mock_db_session: MagicMock, mock_get_session_context: MagicMock
-):
-    """Тест: рассылка не происходит, если нет активных подписок."""
-    with patch(
-        "app.scheduler.tasks.get_active_subscriptions_by_info_type", return_value=[]
-    ) as mock_get_subs:
-        await send_weather_updates(mock_bot)
-        mock_get_subs.assert_called_once_with(session=ANY, info_type=INFO_TYPE_WEATHER)
-        mock_bot.send_message.assert_not_called()
-
-
-# --- Тесты для send_news_updates ---
-@pytest.mark.asyncio
-async def test_send_news_updates_sends_to_subscribed_users(
-    mock_bot: AsyncMock, mock_db_session: MagicMock, mock_get_session_context: MagicMock
-):
-    """Тест: новостная рассылка отправляется пользователям, для которых пришло время."""
-    user1 = DBUser(id=1, telegram_id=111)
-    user2 = DBUser(id=2, telegram_id=222)
-    # Пользователю 1 пора отправлять, пользователю 2 - нет
-    mock_subscriptions = [
-        DBSubscription(
-            id=1,
-            user_id=user1.id,
-            user=user1,
-            info_type=INFO_TYPE_NEWS,
-            status="active",
-            frequency=6,
-            last_sent_at=None,
-        ),
-        DBSubscription(
-            id=2,
-            user_id=user2.id,
-            user=user2,
-            info_type=INFO_TYPE_NEWS,
-            status="active",
-            frequency=6,
-            last_sent_at=datetime.now(timezone.utc) - timedelta(hours=1),
-        ),
+@patch("app.scheduler.tasks.get_top_headlines")
+async def test_format_news_message_success(mock_get_news):
+    """Тест: успешное форматирование сообщения о новостях."""
+    mock_get_news.return_value = [
+        {"title": "Новость 1", "url": "http://a.com"},
+        {"title": "Новость 2", "url": "http://b.com"},
     ]
-    mock_articles = [{"title": "Новость", "url": "http://a.com"}]
+    result = await format_news_message()
+    assert result is not None
+    assert "<b>📰 Последние главные новости (США):</b>" in result
+    assert "<a href='http://a.com'>Новость 1</a>" in result
+    assert "<a href='http://b.com'>Новость 2</a>" in result
+    mock_get_news.assert_awaited_once_with(page_size=5)
+
+
+@pytest.mark.asyncio
+@patch("app.scheduler.tasks.get_top_headlines")
+async def test_format_news_message_no_articles(mock_get_news):
+    """Тест: форматирование новостей при отсутствии статей."""
+    mock_get_news.return_value = []  # API вернуло пустой список
+    result = await format_news_message()
+    assert result is None
+    mock_get_news.assert_awaited_once_with(page_size=5)
+
+
+@pytest.mark.asyncio
+@patch("app.scheduler.tasks.get_kudago_events")
+async def test_format_events_message_success(mock_get_events):
+    """Тест: успешное форматирование сообщения о событиях."""
+    location_slug = "msk"
+    mock_get_events.return_value = [
+        {"title": "Концерт", "site_url": "http://kudago.com/msk/concert/1"},
+    ]
+    result = await format_events_message(location_slug)
+    city_name = "Москва"  # Ожидаем, что slug 'msk' превратится в 'Москва'
+    assert result is not None
+    assert f"<b>🎉 Актуальные события в городе {city_name}:</b>" in result
+    assert "<a href='http://kudago.com/msk/concert/1'>Концерт</a>" in result
+    mock_get_events.assert_awaited_once_with(location=location_slug, page_size=3)
+
+
+@pytest.mark.asyncio
+@patch("app.scheduler.tasks.get_kudago_events")
+async def test_format_events_message_api_error(mock_get_events):
+    """Тест: форматирование событий при ошибке от API."""
+    location_slug = "spb"
+    mock_get_events.return_value = None  # API вернуло None
+    result = await format_events_message(location_slug)
+    assert result is None
+    mock_get_events.assert_awaited_once_with(location=location_slug, page_size=3)
+
+
+# --- СУЩЕСТВУЮЩИЕ ТЕСТЫ ДЛЯ send_single_notification ---
+
+
+@pytest.mark.asyncio
+async def test_send_single_notification_success_weather():
+    """
+    Тест: успешная отправка уведомления о погоде.
+    """
+    mock_bot = AsyncMock(spec=Bot)
+    mock_bot.send_message = AsyncMock()
+
+    user = User(id=1, telegram_id=12345)
+    subscription = Subscription(
+        id=10,
+        user_id=1,
+        info_type=INFO_TYPE_WEATHER,
+        frequency=3,
+        details="Moscow",
+        status="active",
+        user=user,
+    )
+
+    mock_session = MagicMock()
+    mock_session.get.return_value = subscription
+
+    formatted_message = "<b>Погода в городе Moscow:</b>..."
 
     with patch(
-        "app.scheduler.tasks.get_active_subscriptions_by_info_type",
-        return_value=mock_subscriptions,
-    ), patch("app.scheduler.tasks.get_top_headlines", return_value=mock_articles):
-        await send_news_updates(mock_bot)
+        "app.scheduler.tasks.get_session",
+        return_value=MagicMock(__enter__=MagicMock(return_value=mock_session)),
+    ), patch(
+        "app.scheduler.tasks.format_weather_message", return_value=formatted_message
+    ) as mock_format:
+        await send_single_notification(mock_bot, subscription_id=10)
 
-        # Сообщение должно быть отправлено только первому пользователю
+        mock_format.assert_called_once_with("Moscow")
         mock_bot.send_message.assert_called_once_with(
-            chat_id=user1.telegram_id, text=ANY, disable_web_page_preview=True
+            chat_id=12345, text=formatted_message, disable_web_page_preview=True
         )
-        # Коммит должен быть один в конце
-        mock_db_session.commit.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_send_news_updates_api_returns_error(
-    mock_bot: AsyncMock, mock_db_session: MagicMock, mock_get_session_context: MagicMock
-):
-    """
-    Тест: send_news_updates не отправляет сообщение при ошибке API новостей.
-    """
-    user1 = DBUser(id=1, telegram_id=111)
-    mock_subscriptions = [
-        DBSubscription(
-            id=1,
-            user_id=user1.id,
-            user=user1,
-            info_type=INFO_TYPE_NEWS,
-            status="active",
-            frequency=6,
-            last_sent_at=None,
-        )
-    ]
-    mock_api_error = {"error": True, "message": "News API Error"}
+async def test_send_single_notification_subscription_not_found():
+    mock_bot = AsyncMock(spec=Bot)
+    mock_bot.send_message = AsyncMock()
+
+    mock_session = MagicMock()
+    mock_session.get.return_value = None
 
     with patch(
-        "app.scheduler.tasks.get_active_subscriptions_by_info_type",
-        return_value=mock_subscriptions,
-    ), patch(
-        "app.scheduler.tasks.get_top_headlines", return_value=mock_api_error
-    ) as mock_get_headlines_api:
-        await send_news_updates(mock_bot)
-        mock_get_headlines_api.assert_called_once()
+        "app.scheduler.tasks.get_session",
+        return_value=MagicMock(__enter__=MagicMock(return_value=mock_session)),
+    ), patch("app.scheduler.tasks.logger.warning") as mock_logger:
+        await send_single_notification(mock_bot, subscription_id=999)
+
+        mock_logger.assert_called_once_with(
+            "Подписка ID 999 не найдена или неактивна. Задача будет пропущена."
+        )
         mock_bot.send_message.assert_not_called()
-        mock_db_session.commit.assert_not_called()
 
 
-# --- Тесты для send_events_updates ---
 @pytest.mark.asyncio
-async def test_send_events_updates_sends_to_subscribed_users(
-    mock_bot: AsyncMock, mock_db_session: MagicMock, mock_get_session_context: MagicMock
-):
-    """Тест: рассылка о событиях отправляется пользователям, для которых пришло время."""
-    user1_msk = DBUser(id=1, telegram_id=111)
-    user2_spb_due = DBUser(id=2, telegram_id=222)
-    user3_spb_not_due = DBUser(id=3, telegram_id=333)
+async def test_send_single_notification_format_message_fails():
+    mock_bot = AsyncMock(spec=Bot)
+    mock_bot.send_message = AsyncMock()
 
-    mock_subscriptions = [
-        DBSubscription(
-            id=1,
-            user_id=user1_msk.id,
-            user=user1_msk,
-            info_type=INFO_TYPE_EVENTS,
-            details="msk",
-            status="active",
-            frequency=12,
-            last_sent_at=datetime.now(timezone.utc) - timedelta(hours=13),
-        ),
-        DBSubscription(
-            id=2,
-            user_id=user2_spb_due.id,
-            user=user2_spb_due,
-            info_type=INFO_TYPE_EVENTS,
-            details="spb",
-            status="active",
-            frequency=12,
-            last_sent_at=None,
-        ),
-        DBSubscription(
-            id=3,
-            user_id=user3_spb_not_due.id,
-            user=user3_spb_not_due,
-            info_type=INFO_TYPE_EVENTS,
-            details="spb",
-            status="active",
-            frequency=12,
-            last_sent_at=datetime.now(timezone.utc) - timedelta(hours=1),
-        ),
-    ]
+    user = User(id=1, telegram_id=12345)
+    subscription = Subscription(
+        id=11,
+        user_id=1,
+        info_type=INFO_TYPE_NEWS,
+        frequency=6,
+        status="active",
+        user=user,
+    )
 
-    mock_events_msk = {
-        "results": [{"title": "Событие МСК", "site_url": "http://msk.com"}]
-    }
-    mock_events_spb = {
-        "results": [{"title": "Событие СПБ", "site_url": "http://spb.com"}]
-    }
-
-    async def mock_get_kudago_side_effect(location_slug, **kwargs):
-        if location_slug == "msk":
-            return mock_events_msk
-        if location_slug == "spb":
-            return mock_events_spb
-        return None
+    mock_session = MagicMock()
+    mock_session.get.return_value = subscription
 
     with patch(
-        "app.scheduler.tasks.get_active_subscriptions_by_info_type",
-        return_value=mock_subscriptions,
+        "app.scheduler.tasks.get_session",
+        return_value=MagicMock(__enter__=MagicMock(return_value=mock_session)),
     ), patch(
-        "app.scheduler.tasks.get_kudago_events", side_effect=mock_get_kudago_side_effect
-    ) as mock_get_events:
+        "app.scheduler.tasks.format_news_message", return_value=None
+    ) as mock_format, patch(
+        "app.scheduler.tasks.logger.warning"
+    ) as mock_logger:
+        await send_single_notification(mock_bot, subscription_id=11)
 
-        await send_events_updates(mock_bot)
-
-        # API должен быть вызван для обоих городов, т.к. в каждой группе есть кандидат на отправку
-        assert mock_get_events.call_count == 2
-
-        # Сообщения отправлены 2 из 3 пользователей
-        assert mock_bot.send_message.call_count == 2
-        mock_bot.send_message.assert_any_call(
-            chat_id=user1_msk.telegram_id, text=ANY, disable_web_page_preview=True
+        mock_format.assert_called_once()
+        mock_logger.assert_called_once_with(
+            "Не удалось сформировать сообщение для подписки ID 11. Пропуск отправки."
         )
-        mock_bot.send_message.assert_any_call(
-            chat_id=user2_spb_due.telegram_id, text=ANY, disable_web_page_preview=True
-        )
+        mock_bot.send_message.assert_not_called()
 
-        # Коммит один в конце
-        mock_db_session.commit.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_send_single_notification_bot_blocked():
+    """
+    Тест: пользователь заблокировал бота, его подписки деактивируются.
+    """
+    mock_bot = AsyncMock(spec=Bot)
+    mock_bot.send_message.side_effect = TelegramAPIError(
+        method="sendMessage", message="bot was blocked by the user"
+    )
+
+    user = User(id=1, telegram_id=12345)
+    sub1 = Subscription(
+        id=12, user_id=1, info_type=INFO_TYPE_NEWS, frequency=6, status="active", user=user
+    )
+    sub2 = Subscription(
+        id=13,
+        user_id=1,
+        info_type=INFO_TYPE_WEATHER,
+        details="Kyiv",
+        frequency=3,
+        status="active",
+        user=user,
+    )
+
+    mock_session = MagicMock()
+    mock_session.get.return_value = sub1
+    mock_session.exec.return_value.all.return_value = [sub1, sub2]
+
+    formatted_message = "<b>Новости...</b>"
+
+    with patch(
+        "app.scheduler.tasks.get_session",
+        return_value=MagicMock(__enter__=MagicMock(return_value=mock_session)),
+    ), patch(
+        "app.scheduler.tasks.format_news_message", return_value=formatted_message
+    ), patch(
+        "app.scheduler.tasks.delete_subscription"
+    ) as mock_delete_subscription, patch(
+        "app.scheduler.tasks.logger.warning"
+    ) as mock_logger:
+        await send_single_notification(mock_bot, subscription_id=12)
+
+        mock_bot.send_message.assert_called_once()
+        assert mock_delete_subscription.call_count == 2
+        mock_delete_subscription.assert_any_call(ANY, 12)
+        mock_delete_subscription.assert_any_call(ANY, 13)
+        mock_logger.assert_any_call(
+            f"Пользователь 12345 заблокировал бота. Деактивируем все его подписки."
+        )

@@ -1,22 +1,18 @@
 __pycache__/
 *.py[cod]
 .venv/
-.env
 .idea/
 .pytest_cache/
-Dockerfile
 *.log
 *.pot
-*.pyc
 .env.example
 .env
-.env
-/.idea/inspectionProfiles
-PLANNING.md
-TASK.md
+# IDE-specific
+.idea/inspectionProfiles
 .idea/vcs.xml
 .idea/modules.xml
+
+# Generated artifacts
 app/database/infopalbot.db
-app/database/infopalbot.db
-app/database/infopalbot.db
-pyproject.toml
+htmlcov/
+.coverage

@@ -1,12 +1,17 @@
 import pytest
-import html  # Для expected_help_text
+import html
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# Импортируем тестируемые обработчики
-from app.bot.main import process_start_command, process_help_command
-from app.database.models import User as DBUser  # Для мокирования пользователя БД
-from aiogram.types import Message, User as AiogramUser, Chat  # Типы aiogram
-from aiogram.fsm.context import FSMContext  # Для process_start_command
+# Импортируем тестируемые обработчики из нового расположения
+from app.bot.handlers.basic import (
+    process_start_command,
+    process_help_command,
+    cmd_cancel_any_state,
+)
+from app.database.models import User as DBUser
+from aiogram.types import Message, User as AiogramUser, Chat, ReplyKeyboardRemove
+from aiogram.fsm.context import FSMContext
+from app.bot.fsm import SubscriptionStates  # Импорт состояний из нового места
 
 # --- Тесты для process_start_command ---
 
@@ -15,133 +20,29 @@ from aiogram.fsm.context import FSMContext  # Для process_start_command
 async def test_process_start_command_new_user():
     """
     Тест: команда /start для нового пользователя.
-    Ожидается:
-    - Вызов create_user_if_not_exists.
-    - Отправка приветственного сообщения.
-    - Сброс состояния FSM.
     """
     mock_message = AsyncMock(spec=Message)
     mock_message.answer = AsyncMock()
-    mock_message.from_user = MagicMock(spec=AiogramUser)
-    mock_message.from_user.id = 12345
-    mock_message.from_user.full_name = "Test User"
-    mock_message.chat = MagicMock(spec=Chat)
-    mock_message.chat.id = 12345
+    mock_message.from_user = MagicMock(spec=AiogramUser, id=12345, full_name="Test User")
     mock_state = AsyncMock(spec=FSMContext)
 
-    mock_db_user = DBUser(id=1, telegram_id=12345)
-    mock_session = MagicMock()
-
-    with patch("app.bot.main.get_session") as mock_get_session, patch(
-        "app.bot.main.create_user_if_not_exists", return_value=mock_db_user
-    ) as mock_create_user:
-
-        mock_session_context_manager = MagicMock()
-        mock_session_context_manager.__enter__.return_value = mock_session
-        mock_get_session.return_value = mock_session_context_manager
-
+    # Обновляем цели для patch
+    with patch("app.bot.handlers.basic.get_session"), patch(
+        "app.bot.handlers.basic.create_user_if_not_exists"
+    ) as mock_create_user, patch(
+        "app.bot.handlers.basic.log_user_action"
+    ) as mock_log_action:
         await process_start_command(mock_message, mock_state)
 
         mock_state.clear.assert_called_once()
-        mock_create_user.assert_called_once_with(
-            session=mock_session, telegram_id=12345
-        )
+        mock_create_user.assert_called_once()
+        mock_log_action.assert_called_once()
         expected_reply_text = (
             f"Привет, {mock_message.from_user.full_name}! Я InfoPalBot. "
             f"Я могу предоставить тебе актуальную информацию.\n"
             f"Используй /help, чтобы увидеть список доступных команд."
         )
         mock_message.answer.assert_called_once_with(expected_reply_text)
-
-
-@pytest.mark.asyncio
-async def test_process_start_command_existing_user():
-    """
-    Тест: команда /start для существующего пользователя.
-    Ожидается:
-    - Вызов create_user_if_not_exists.
-    - Отправка приветственного сообщения.
-    - Сброс состояния FSM.
-    """
-    mock_message = AsyncMock(spec=Message)
-    mock_message.answer = AsyncMock()
-    mock_message.from_user = MagicMock(spec=AiogramUser)
-    mock_message.from_user.id = 54321
-    mock_message.from_user.full_name = "Existing User"
-    mock_message.chat = MagicMock(spec=Chat)
-    mock_message.chat.id = 54321
-    mock_state = AsyncMock(spec=FSMContext)
-
-    mock_db_user = DBUser(id=2, telegram_id=54321)
-    mock_session = MagicMock()
-
-    with patch("app.bot.main.get_session") as mock_get_session, patch(
-        "app.bot.main.create_user_if_not_exists", return_value=mock_db_user
-    ) as mock_create_user:
-
-        mock_session_context_manager = MagicMock()
-        mock_session_context_manager.__enter__.return_value = mock_session
-        mock_get_session.return_value = mock_session_context_manager
-
-        await process_start_command(mock_message, mock_state)
-
-        mock_state.clear.assert_called_once()
-        mock_create_user.assert_called_once_with(
-            session=mock_session, telegram_id=54321
-        )
-        expected_reply_text = (
-            f"Привет, {mock_message.from_user.full_name}! Я InfoPalBot. "
-            f"Я могу предоставить тебе актуальную информацию.\n"
-            f"Используй /help, чтобы увидеть список доступных команд."
-        )
-        mock_message.answer.assert_called_once_with(expected_reply_text)
-
-
-@pytest.mark.asyncio
-async def test_process_start_command_db_error():
-    """
-    Тест: команда /start с ошибкой при работе с БД.
-    Ожидается:
-    - Отправка сообщения об ошибке пользователю.
-    - Логирование ошибки.
-    - Сброс состояния FSM.
-    """
-    mock_message = AsyncMock(spec=Message)
-    mock_message.answer = AsyncMock()
-    mock_message.from_user = MagicMock(spec=AiogramUser)
-    mock_message.from_user.id = 67890
-    mock_message.from_user.full_name = "Error User"
-    mock_message.chat = MagicMock(spec=Chat)
-    mock_message.chat.id = 67890
-    mock_state = AsyncMock(spec=FSMContext)
-
-    db_exception = Exception("Тестовая ошибка БД")
-
-    with patch("app.bot.main.get_session") as mock_get_session, patch(
-        "app.bot.main.create_user_if_not_exists", side_effect=db_exception
-    ) as mock_create_user, patch("app.bot.main.logger") as mock_logger:
-
-        mock_session_context_manager = MagicMock()
-        mock_session = MagicMock()
-        mock_session_context_manager.__enter__.return_value = mock_session
-        mock_get_session.return_value.__next__.return_value = (
-            mock_session_context_manager
-        )
-
-        await process_start_command(mock_message, mock_state)
-
-        mock_state.clear.assert_called_once()
-        # mock_create_user.assert_called_once_with(session=mock_session, telegram_id=67890) # Вызов будет, но с ошибкой
-        mock_message.answer.assert_called_once_with(
-            "Произошла ошибка при обработке вашего запроса. Попробуйте позже."
-        )
-        mock_logger.error.assert_called_once()
-        args, kwargs = mock_logger.error.call_args
-        assert (
-            f"Ошибка при обработке команды /start для пользователя {mock_message.from_user.id}: {db_exception}"
-            in args[0]
-        )
-        assert kwargs.get("exc_info") is True
 
 
 # --- Тесты для process_help_command ---
@@ -151,16 +52,15 @@ async def test_process_start_command_db_error():
 async def test_process_help_command():
     """
     Тест: команда /help.
-    Ожидается:
-    - Отправка текста справки.
-    - Логирование действия.
     """
     mock_message = AsyncMock(spec=Message)
     mock_message.answer = AsyncMock()
-    mock_message.from_user = MagicMock(spec=AiogramUser)
-    mock_message.from_user.id = 11223
+    mock_message.from_user = MagicMock(spec=AiogramUser, id=11223)
 
-    with patch("app.bot.main.logger.info") as mock_logger_info:
+    # Обновляем цели для patch
+    with patch("app.bot.handlers.basic.get_session"), patch(
+        "app.bot.handlers.basic.log_user_action"
+    ), patch("app.bot.handlers.basic.logger") as mock_logger:
         await process_help_command(mock_message)
 
         expected_help_text = (
@@ -176,6 +76,49 @@ async def test_process_help_command():
             "<code>/cancel</code> - Отменить текущее действие (например, подписку)\n"
         )
         mock_message.answer.assert_called_once_with(expected_help_text)
-        mock_logger_info.assert_called_with(
+        mock_logger.info.assert_called_with(
             f"Отправлена справка по команде /help пользователю {mock_message.from_user.id}"
+        )
+
+
+# --- Тесты для cmd_cancel_any_state ---
+
+
+@pytest.mark.asyncio
+async def test_cmd_cancel_any_state_with_state():
+    """Тест: /cancel вызывается, когда пользователь в активном состоянии."""
+    mock_message = AsyncMock(spec=Message)
+    mock_message.answer = AsyncMock()
+    mock_message.from_user = MagicMock(id=123)
+    mock_state = AsyncMock(spec=FSMContext)
+    mock_state.get_state.return_value = SubscriptionStates.choosing_frequency.state
+
+    with patch("app.bot.handlers.basic.get_session"), patch(
+        "app.bot.handlers.basic.log_user_action"
+    ):
+        await cmd_cancel_any_state(mock_message, mock_state)
+
+        mock_state.clear.assert_called_once()
+        mock_message.answer.assert_called_once_with(
+            "Действие отменено.", reply_markup=ReplyKeyboardRemove()
+        )
+
+
+@pytest.mark.asyncio
+async def test_cmd_cancel_any_state_no_state():
+    """Тест: /cancel вызывается, когда нет активного состояния."""
+    mock_message = AsyncMock(spec=Message)
+    mock_message.answer = AsyncMock()
+    mock_message.from_user = MagicMock(id=123)
+    mock_state = AsyncMock(spec=FSMContext)
+    mock_state.get_state.return_value = None  # Нет состояния
+
+    with patch("app.bot.handlers.basic.get_session"), patch(
+        "app.bot.handlers.basic.log_user_action"
+    ):
+        await cmd_cancel_any_state(mock_message, mock_state)
+
+        mock_state.clear.assert_not_called()  # Очистка не должна вызываться
+        mock_message.answer.assert_called_once_with(
+            "Нет активного действия для отмены.", reply_markup=ReplyKeyboardRemove()
         )

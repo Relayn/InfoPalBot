@@ -1,4 +1,4 @@
-name: Python CI
+name: Python CI/CD
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v4
@@ -35,10 +35,18 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Run tests with pytest
+    - name: Lint with ruff
       run: |
-        pytest
+        ruff check .
+
+    - name: Check formatting with black
+      run: |
+        black --check .
+
+    - name: Run tests and check coverage
+      run: |
+        pytest --cov=app --cov-report=term-missing --cov-fail-under=75
 
     - name: Build Docker image
       run: |
-        docker build . --file Dockerfile --tag infopalbot:latest 
+        docker build . --file Dockerfile --tag infopalbot:latest

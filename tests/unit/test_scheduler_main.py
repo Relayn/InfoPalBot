@@ -1,183 +1,106 @@
+# Файл: tests/unit/test_scheduler_main.py
+
 import pytest
-from unittest.mock import MagicMock, patch, ANY, PropertyMock
+from unittest.mock import MagicMock, patch, ANY
 from aiogram import Bot
 
-# Импортируем тестируемый модуль и его компоненты
-from app.scheduler import main as scheduler_main_module
-from app.scheduler.main import (
-    set_bot_instance,
-    schedule_jobs,
-    shutdown_scheduler,
-    scheduler,  # Глобальный экземпляр AsyncIOScheduler
-    _bot_instance,  # Глобальная переменная для экземпляра бота
-)
+# ИЗМЕНЕНО: убран PropertyMock, он здесь не нужен
+# from unittest.mock import MagicMock, patch, ANY, PropertyMock
 
-# Импортируем задачи, чтобы проверить, что они передаются в add_job
-from app.scheduler.tasks import (
-    test_scheduled_task,
-    send_weather_updates,
-    send_news_updates,
-    send_events_updates,
-)
+# ИЗМЕНЕНО: импортируем только то, что нужно для тестов
+from app.scheduler.main import set_bot_instance, schedule_jobs, shutdown_scheduler
+from app.database.models import Subscription
 
 
-@pytest.fixture(autouse=True)
-def reset_global_scheduler_state():
-    """
-    Эта фикстура будет автоматически сбрасывать состояние глобальных переменных
-    в модуле scheduler_main перед каждым тестом.
-    """
-    original_bot_instance = scheduler_main_module._bot_instance
-    original_scheduler_jobs = list(
-        scheduler_main_module.scheduler.get_jobs()
-    )  # Копируем список джобов
-
-    # Очищаем существующие джобы из глобального шедулера, если они есть от предыдущих тестов
-    for job in original_scheduler_jobs:
-        if scheduler_main_module.scheduler.get_job(
-            job.id
-        ):  # Проверяем, существует ли еще джоб
-            scheduler_main_module.scheduler.remove_job(job.id)
-
-    scheduler_main_module._bot_instance = None  # Сбрасываем экземпляр бота
-
-    yield  # Тест выполняется здесь
-
-    # Восстанавливаем исходное состояние после теста (хотя для _bot_instance это может быть не так критично)
-    scheduler_main_module._bot_instance = original_bot_instance
-    # Восстанавливать джобы не будем, т.к. каждый тест должен работать с чистым планировщиком
-
+# В этом файле фикстура autouse не нужна, так как мы будем мокать сам планировщик
+# @pytest.fixture(autouse=True)
+# def reset_scheduler():
+#     ...
 
 def test_set_bot_instance():
-    """Тест: функция set_bot_instance корректно устанавливает _bot_instance."""
+    """
+    Тест: установка экземпляра бота.
+    """
     mock_bot = MagicMock(spec=Bot)
-
-    with patch.object(scheduler_main_module, "logger") as mock_logger:
+    # Патчим сам объект scheduler, чтобы проверить вызов configure
+    with patch("app.scheduler.main.scheduler") as mock_scheduler:
         set_bot_instance(mock_bot)
-        assert scheduler_main_module._bot_instance == mock_bot
-        mock_logger.info.assert_called_once_with(
-            "Экземпляр бота установлен для планировщика."
-        )
-
-    # Сброс для чистоты после теста, хотя фикстура reset_global_scheduler_state это делает
-    scheduler_main_module._bot_instance = None
+        mock_scheduler.configure.assert_called_once_with(job_defaults={"kwargs": {"bot": mock_bot}})
 
 
-@patch.object(scheduler_main_module.scheduler, "add_job", MagicMock())
-@patch.object(scheduler_main_module.scheduler, "get_job", MagicMock(return_value=None))
-def test_schedule_jobs_all_added_successfully():
+@patch("app.scheduler.main.get_session")
+@patch("app.scheduler.main.scheduler")  # Патчим сам планировщик
+def test_schedule_jobs_with_active_subscriptions(mock_scheduler, mock_get_session):
     """
-    Тест: schedule_jobs добавляет все задачи-диспетчеры, когда _bot_instance установлен
-    и задачи еще не существуют.
+    Тест: планирование задач для активных подписок из БД.
     """
     mock_bot = MagicMock(spec=Bot)
-    scheduler_main_module._bot_instance = mock_bot
+    set_bot_instance(mock_bot)
 
-    with patch.object(scheduler_main_module, "logger"):
-        schedule_jobs()
+    sub1 = Subscription(id=1, user_id=101, info_type="weather", frequency=3, status="active")
+    sub2 = Subscription(id=2, user_id=102, info_type="news", frequency=6, status="active")
 
-        # Теперь у нас 3 задачи-диспетчера
-        assert scheduler_main_module.scheduler.get_job.call_count == 3
-        scheduler_main_module.scheduler.get_job.assert_any_call("weather_dispatcher")
-        scheduler_main_module.scheduler.get_job.assert_any_call("news_dispatcher")
-        scheduler_main_module.scheduler.get_job.assert_any_call("events_dispatcher")
-
-        assert scheduler_main_module.scheduler.add_job.call_count == 3
-
-        call_args_list = scheduler_main_module.scheduler.add_job.call_args_list
-        added_jobs = {call.kwargs["id"]: call for call in call_args_list}
-
-        expected_jobs = {
-            "weather_dispatcher": send_weather_updates,
-            "news_dispatcher": send_news_updates,
-            "events_dispatcher": send_events_updates,
-        }
-
-        for job_id, expected_func in expected_jobs.items():
-            call = added_jobs.get(job_id)
-            assert call is not None, f"Задача '{job_id}' не найдена"
-            assert call.args[0] == expected_func
-            assert call.args[1] == "interval"
-            assert call.kwargs["args"] == [mock_bot]
-            assert call.kwargs["minutes"] == 5
-
-    scheduler_main_module._bot_instance = None
-
-
-@patch.object(scheduler_main_module.scheduler, "add_job", MagicMock())
-@patch.object(
-    scheduler_main_module.scheduler, "get_job", MagicMock(return_value=MagicMock())
-)  # get_job возвращает мок (джоб существует)
-def test_schedule_jobs_not_added_if_exist():
-    """
-    Тест: schedule_jobs не добавляет задачи, если они уже существуют (get_job возвращает мок).
-    """
-    mock_bot = MagicMock(spec=Bot)
-    scheduler_main_module._bot_instance = mock_bot
+    mock_session = MagicMock()
+    mock_session.query.return_value.filter.return_value.all.return_value = [sub1, sub2]
+    mock_get_session.return_value.__enter__.return_value = mock_session
 
     schedule_jobs()
-    scheduler_main_module.scheduler.add_job.assert_not_called()  # add_job не должен вызываться
 
-    scheduler_main_module._bot_instance = None  # Сброс
+    # Проверяем вызовы у нашего мока планировщика
+    assert mock_scheduler.add_job.call_count == 2
+    mock_scheduler.add_job.assert_any_call(
+        ANY, trigger="interval", hours=3, id="sub_1",
+        kwargs={"subscription_id": 1}, replace_existing=True, next_run_time=ANY
+    )
+    mock_scheduler.add_job.assert_any_call(
+        ANY, trigger="interval", hours=6, id="sub_2",
+        kwargs={"subscription_id": 2}, replace_existing=True, next_run_time=ANY
+    )
 
 
-def test_schedule_jobs_no_bot_instance():
+@patch("app.scheduler.main.get_session")
+@patch("app.scheduler.main.scheduler")  # Патчим сам планировщик
+def test_schedule_jobs_no_active_subscriptions(mock_scheduler, mock_get_session):
     """
-    Тест: задачи рассылок не добавляются, если _bot_instance is None.
+    Тест: нет активных подписок, ни одна задача не добавляется.
     """
-    scheduler_main_module._bot_instance = None
+    mock_bot = MagicMock(spec=Bot)
+    set_bot_instance(mock_bot)
 
-    with patch.object(
-        scheduler_main_module.scheduler, "add_job", MagicMock()
-    ) as mock_add_job, patch.object(
-        scheduler_main_module.scheduler, "get_job", return_value=None
-    ), patch.object(
-        scheduler_main_module, "logger"
-    ) as mock_logger:
+    mock_session = MagicMock()
+    mock_session.query.return_value.filter.return_value.all.return_value = []
+    mock_get_session.return_value.__enter__.return_value = mock_session
 
-        schedule_jobs()
-
-        mock_logger.warning.assert_called_once_with(
-            "Экземпляр бота не установлен. Задачи рассылок не могут быть добавлены."
-        )
-        mock_add_job.assert_not_called()
-
-    scheduler_main_module._bot_instance = None
+    schedule_jobs()
+    mock_scheduler.add_job.assert_not_called()
 
 
-@patch.object(scheduler_main_module.scheduler, "shutdown", MagicMock())
+# ИЗМЕНЕНО: Полностью переписаны тесты для shutdown_scheduler
 def test_shutdown_scheduler_when_running():
-    """Тест: shutdown_scheduler вызывает scheduler.shutdown(), если планировщик запущен."""
-    with patch.object(
-        scheduler_main_module.scheduler.__class__,
-        "running",
-        new_callable=PropertyMock,
-        return_value=True,
-    ) as mock_running_prop, patch.object(
-        scheduler_main_module, "logger"
-    ) as mock_logger:
-        # Важно патчить на уровне класса (__class__), чтобы PropertyMock сработал для экземпляра
-        # mock_running_prop здесь не используется, но показывает, что свойство было заменено
+    """
+    Тест: остановка запущенного планировщика.
+    """
+    with patch("app.scheduler.main.scheduler") as mock_scheduler:
+        # Настраиваем наш мок
+        mock_scheduler.running = True
+
+        # Вызываем функцию
         shutdown_scheduler()
-        scheduler_main_module.scheduler.shutdown.assert_called_once_with()
-        mock_logger.info.assert_called_once_with(
-            "Планировщик APScheduler успешно остановлен."
-        )
+
+        # Проверяем, что у мока был вызван метод shutdown
+        mock_scheduler.shutdown.assert_called_once()
 
 
-@patch.object(scheduler_main_module.scheduler, "shutdown", MagicMock())
 def test_shutdown_scheduler_when_not_running():
-    """Тест: shutdown_scheduler не вызывает scheduler.shutdown(), если планировщик не запущен."""
-    with patch.object(
-        scheduler_main_module.scheduler.__class__,
-        "running",
-        new_callable=PropertyMock,
-        return_value=False,
-    ) as mock_running_prop, patch.object(
-        scheduler_main_module, "logger"
-    ) as mock_logger:
+    """
+    Тест: попытка остановки незапущенного планировщика.
+    """
+    with patch("app.scheduler.main.scheduler") as mock_scheduler:
+        # Настраиваем наш мок
+        mock_scheduler.running = False
+
+        # Вызываем функцию
         shutdown_scheduler()
-        scheduler_main_module.scheduler.shutdown.assert_not_called()
-        mock_logger.info.assert_called_once_with(
-            "Планировщик не был запущен или уже остановлен."
-        )
+
+        # Проверяем, что метод shutdown НЕ был вызван
+        mock_scheduler.shutdown.assert_not_called()

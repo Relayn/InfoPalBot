@@ -1,160 +1,100 @@
-"""
-Модуль для инициализации и управления планировщиком задач APScheduler.
-Отвечает за запуск, остановку и добавление запланированных задач.
-
-Этот модуль обеспечивает централизованное управление всеми запланированными задачами бота,
-используя APScheduler для асинхронного выполнения задач. Модуль поддерживает:
-
-- Инициализацию и конфигурацию планировщика
-- Добавление и управление задачами рассылки
-- Корректное завершение работы планировщика
-- Интеграцию с экземпляром бота для отправки сообщений
-
-Основные компоненты:
-- AsyncIOScheduler: асинхронный планировщик для работы с asyncio
-- Глобальный экземпляр бота для задач рассылки
-- Функции управления жизненным циклом планировщика
-
-Запланированные задачи:
-1. Тестовая задача (каждые 30 секунд)
-2. Рассылка погоды (каждые 3 часа)
-3. Рассылка новостей (каждые 6 часов)
-4. Рассылка событий (каждые 2 минуты в тестовом режиме)
-
-Пример использования:
-    # В on_startup бота:
-    set_bot_instance(bot)
-    schedule_jobs()
-    scheduler.start()
-
-    # В on_shutdown бота:
-    shutdown_scheduler()
-"""
+# Файл: app/scheduler/main.py
 
 import logging
-from apscheduler.schedulers.asyncio import (
-    AsyncIOScheduler,
-)  # Асинхронный планировщик для asyncio
-from aiogram import Bot  # Для передачи экземпляра бота в задачи рассылки
-from typing import Optional  # Для аннотации типа Optional
+from typing import Optional
 
-# Импортируем все задачи, которые будут планироваться
-from app.scheduler.tasks import (
-    test_scheduled_task,
-    send_weather_updates,
-    send_news_updates,
-    send_events_updates,
-)
+from aiogram import Bot
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.jobstores.memory import MemoryJobStore
+from apscheduler.executors.asyncio import AsyncIOExecutor
+from datetime import datetime, timezone
 
-# Настройка логгера для модуля
+from app.database.session import get_session
+from app.database.models import Subscription
+from .tasks import send_single_notification
+
 logger = logging.getLogger(__name__)
 
-# Создаем глобальный экземпляр планировщика.
-# Используем AsyncIOScheduler, так как бот работает на asyncio.
-# Указываем часовой пояс для корректной работы cron-триггеров.
-scheduler: AsyncIOScheduler = AsyncIOScheduler(timezone="Europe/Moscow")
-
-# Глобальная переменная для хранения экземпляра бота.
-# Экземпляр бота необходим задачам рассылки для отправки сообщений.
 _bot_instance: Optional[Bot] = None
+jobstores = {"default": MemoryJobStore()}
+executors = {"default": AsyncIOExecutor()}
+job_defaults = {"coalesce": False, "max_instances": 3}
+scheduler = AsyncIOScheduler(
+    jobstores=jobstores,
+    executors=executors,
+    job_defaults=job_defaults,
+    timezone="UTC",
+)
 
 
-def set_bot_instance(bot: Bot) -> None:
-    """
-    Устанавливает экземпляр Aiogram Bot для использования в задачах планировщика.
-    Эта функция должна быть вызвана в on_startup бота перед добавлением задач.
-
-    Args:
-        bot (Bot): Экземпляр бота Aiogram, который будет использоваться
-                  для отправки сообщений в задачах рассылки.
-
-    Note:
-        - Функция должна быть вызвана до schedule_jobs()
-        - Без установленного экземпляра бота задачи рассылки не будут добавлены
-        - Экземпляр бота хранится в глобальной переменной _bot_instance
-    """
+def set_bot_instance(bot: Bot):
     global _bot_instance
-    _bot_instance = bot
-    logger.info("Экземпляр бота установлен для планировщика.")
+    if _bot_instance is None:
+        _bot_instance = bot
+        scheduler.configure(job_defaults={"kwargs": {"bot": _bot_instance}})
+        logger.info("Экземпляр бота установлен для планировщика.")
 
 
-def schedule_jobs() -> None:
+def schedule_jobs():
     """
-    Добавляет все необходимые задачи в планировщик.
-    Задачи добавляются только один раз, если они еще не существуют в планировщике.
-    Задачи-диспетчеры запускаются каждые 5 минут и сами определяют,
-    какие уведомления пора отправлять на основе настроек частоты подписок.
+    Динамически планирует задачи для каждой активной подписки из базы данных.
+    Поддерживает интервальные и cron-задачи.
     """
     if _bot_instance is None:
-        logger.warning(
-            "Экземпляр бота не установлен. Задачи рассылок не могут быть добавлены."
-        )
+        logger.error("Экземпляр бота не установлен. Планирование задач невозможно.")
         return
 
+    logger.info("Начало динамического планирования задач из БД...")
     try:
-        job_interval_minutes = 5
+        with get_session() as session:
+            active_subscriptions = session.query(Subscription).filter(Subscription.status == "active").all()
 
-        if not scheduler.get_job("weather_dispatcher"):
-            scheduler.add_job(
-                send_weather_updates,
-                "interval",
-                minutes=job_interval_minutes,
-                id="weather_dispatcher",
-                args=[_bot_instance],
-            )
-            logger.info(
-                f"Задача рассылки погоды добавлена (каждые {job_interval_minutes} минут)."
-            )
+            if not active_subscriptions:
+                logger.info("Активных подписок в БД не найдено. Новые задачи не запланированы.")
+                return
 
-        if not scheduler.get_job("news_dispatcher"):
-            scheduler.add_job(
-                send_news_updates,
-                "interval",
-                minutes=job_interval_minutes,
-                id="news_dispatcher",
-                args=[_bot_instance],
-            )
-            logger.info(
-                f"Задача рассылки новостей добавлена (каждые {job_interval_minutes} минут)."
-            )
+            for sub in active_subscriptions:
+                job_id = f"sub_{sub.id}"
+                job_params = {}
 
-        if not scheduler.get_job("events_dispatcher"):
-            scheduler.add_job(
-                send_events_updates,
-                "interval",
-                minutes=job_interval_minutes,
-                id="events_dispatcher",
-                args=[_bot_instance],
-            )
-            logger.info(
-                f"Задача рассылки событий добавлена (каждые {job_interval_minutes} минут)."
-            )
+                # --- ИЗМЕНЕНО: Логика выбора типа триггера ---
+                if sub.frequency:
+                    job_params = {"trigger": "interval", "hours": sub.frequency}
+                    log_msg = f"интервалом {sub.frequency} ч."
+                elif sub.cron_expression:
+                    parts = sub.cron_expression.split()
+                    job_params = {"trigger": "cron", "minute": int(parts[0]), "hour": int(parts[1])}
+                    log_msg = f"расписанием cron: '{sub.cron_expression}'"
+                else:
+                    logger.warning(f"Подписка ID {sub.id} не имеет ни frequency, ни cron_expression. Пропуск.")
+                    continue
+
+                try:
+                    scheduler.add_job(
+                        send_single_notification,
+                        id=job_id,
+                        kwargs={"subscription_id": sub.id},
+                        replace_existing=True,
+                        next_run_time=datetime.now(timezone.utc),
+                        **job_params
+                    )
+                    logger.info(
+                        f"Задача {job_id} для подписки (type: {sub.info_type}, user: {sub.user_id}) запланирована с {log_msg}")
+                except Exception as e:
+                    logger.error(f"Ошибка при добавлении задачи {job_id} в планировщик: {e}", exc_info=True)
+
+            logger.info(f"Планирование завершено. Всего запланировано/обновлено {len(active_subscriptions)} задач.")
 
     except Exception as e:
-        logger.error(f"Ошибка при добавлении задач в планировщик: {e}", exc_info=True)
+        logger.error(f"Критическая ошибка при получении подписок из БД для планирования: {e}", exc_info=True)
 
 
-def shutdown_scheduler() -> None:
-    """
-    Корректно останавливает планировщик APScheduler.
-    Эта функция должна быть вызвана при завершении работы приложения.
-
-    Функция:
-    1. Проверяет, запущен ли планировщик
-    2. Если запущен, останавливает все запланированные задачи
-    3. Логирует результат операции
-
-    Note:
-        - Функция должна быть вызвана в on_shutdown бота
-        - Остановка планировщика происходит в фоновом режиме
-        - Все незавершенные задачи будут корректно завершены
-        - После остановки планировщика новые задачи не могут быть добавлены
-    """
+def shutdown_scheduler():
     if scheduler.running:
         try:
-            scheduler.shutdown()  # Останавливает все запланированные задачи
+            scheduler.shutdown()
             logger.info("Планировщик APScheduler успешно остановлен.")
         except Exception as e:
             logger.error(f"Ошибка при остановке планировщика: {e}", exc_info=True)
     else:
-        logger.info("Планировщик не был запущен или уже остановлен.")
+        logger.info("Планировщик APScheduler не был запущен, остановка не требуется.")
