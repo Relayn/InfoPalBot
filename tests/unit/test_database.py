@@ -100,10 +100,18 @@ def test_create_user_if_not_exists_returns_existing(session: Session):
 
 # --- Тесты для Subscription CRUD (ИЗМЕНЕНО) ---
 def test_create_subscription_success_with_frequency(session: Session, db_user: User):
-    sub = create_subscription(session, db_user.id, "weather", details="Moscow", frequency=12)
+    sub = create_subscription(
+        session,
+        db_user.id,
+        "weather",
+        details="Moscow",
+        category="rainy",
+        frequency=12,
+    )
     assert sub is not None
     assert sub.user_id == db_user.id
     assert sub.frequency == 12
+    assert sub.category == "rainy"
     assert sub.cron_expression is None
 
 def test_create_subscription_success_with_cron(session: Session, db_user: User):
@@ -141,12 +149,31 @@ def test_get_subscriptions_by_user_id_no_subscriptions(session: Session, db_user
     assert len(get_subscriptions_by_user_id(session, db_user.id)) == 0
 
 def test_get_subscription_by_user_and_type_exists(session: Session, db_user: User):
-    created_sub = create_subscription(session, db_user.id, "weather", details="London", frequency=12)
-    found_sub = get_subscription_by_user_and_type(session, db_user.id, "weather", "London")
-    assert found_sub is not None; assert found_sub.id == created_sub.id
-    created_sub_no_details = create_subscription(session, db_user.id, "news_general", frequency=6)
-    found_sub_no_details = get_subscription_by_user_and_type(session, db_user.id, "news_general")
-    assert found_sub_no_details is not None; assert found_sub_no_details.details is None
+    # Тест с деталями и категорией
+    sub1 = create_subscription(session, db_user.id, "events", details="msk", category="concert", frequency=1)
+    found1 = get_subscription_by_user_and_type(session, db_user.id, "events", "msk", "concert")
+    assert found1 is not None
+    assert found1.id == sub1.id
+
+    # Тест без деталей, но с категорией
+    sub2 = create_subscription(session, db_user.id, "news", category="technology", frequency=3)
+    found2 = get_subscription_by_user_and_type(session, db_user.id, "news", category="technology")
+    assert found2 is not None
+    assert found2.id == sub2.id
+
+    # Тест с деталями, но без категории
+    sub3 = create_subscription(session, db_user.id, "weather", details="London", frequency=12)
+    found3 = get_subscription_by_user_and_type(session, db_user.id, "weather", "London")
+    assert found3 is not None
+    assert found3.id == sub3.id
+    assert get_subscription_by_user_and_type(session, db_user.id, "weather", "London", "sunny") is None
+
+    # Тест без деталей и без категории
+    sub4 = create_subscription(session, db_user.id, "news_all", frequency=6)
+    found4 = get_subscription_by_user_and_type(session, db_user.id, "news_all")
+    assert found4 is not None
+    assert found4.details is None
+    assert found4.category is None
 
 def test_get_subscription_by_user_and_type_not_exists(session: Session, db_user: User):
     create_subscription(session, db_user.id, "weather", details="Paris", frequency=3)
@@ -178,3 +205,34 @@ def test_log_user_action_handles_exception(session: Session):
         with patch("app.database.crud.logger.error") as mock_logger:
             log_user_action(session, 123, "/command")
             mock_logger.assert_called_once()
+
+
+def test_create_db_and_tables_calls_metadata_create_all(engine):
+    """Тест: функция create_db_and_tables вызывает SQLModel.metadata.create_all."""
+    with patch("app.database.session.engine", new=engine), \
+            patch("app.database.session.SQLModel.metadata.create_all") as mock_create_all:
+        from app.database.session import create_db_and_tables
+
+        create_db_and_tables()
+
+        mock_create_all.assert_called_once_with(engine)
+
+
+def test_get_session_closes_on_exception():
+    """Тест: контекстный менеджер get_session закрывает сессию даже при исключении."""
+    from app.database.session import get_session, engine
+
+    # Мокируем сам класс Session, чтобы отследить вызов close() на его экземпляре
+    with patch("app.database.session.Session") as mock_session_class:
+        mock_session_instance = mock_session_class.return_value
+        with pytest.raises(ValueError, match="Test exception"):
+            with get_session() as session:
+                # Убедимся, что мы получили наш мок
+                assert session == mock_session_instance
+                # Имитируем ошибку внутри блока with
+                raise ValueError("Test exception")
+
+        # Проверяем, что сессия была создана с правильным движком
+        mock_session_class.assert_called_once_with(engine)
+        # Главная проверка: метод close() был вызван в блоке finally
+        mock_session_instance.close.assert_called_once()

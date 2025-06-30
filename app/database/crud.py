@@ -39,6 +39,7 @@ def create_subscription(
     user_id: int,
     info_type: str,
     details: Optional[str] = None,
+    category: Optional[str] = None,
     frequency: Optional[int] = None,
     cron_expression: Optional[str] = None,
 ) -> Subscription:
@@ -55,6 +56,7 @@ def create_subscription(
         user_id=user_id,
         info_type=info_type,
         details=details,
+        category=category,
         frequency=frequency,
         cron_expression=cron_expression,
         status="active",
@@ -72,8 +74,16 @@ def get_subscriptions_by_user_id(session: Session, user_id: int) -> List[Subscri
     return session.exec(statement).all()
 
 def get_subscription_by_user_and_type(
-    session: Session, user_id: int, info_type: str, details: Optional[str] = None
+    session: Session,
+    user_id: int,
+    info_type: str,
+    details: Optional[str] = None,
+    category: Optional[str] = None,
 ) -> Optional[Subscription]:
+    """
+    Находит активную подписку по набору критериев.
+    Используется для проверки на дубликаты перед созданием новой подписки.
+    """
     statement = select(Subscription).where(
         Subscription.user_id == user_id,
         Subscription.info_type == info_type,
@@ -83,6 +93,12 @@ def get_subscription_by_user_and_type(
         statement = statement.where(Subscription.details == details)
     else:
         statement = statement.where(Subscription.details.is_(None))
+
+    if category is not None:
+        statement = statement.where(Subscription.category == category)
+    else:
+        statement = statement.where(Subscription.category.is_(None))
+
     return session.exec(statement).first()
 
 def delete_subscription(session: Session, subscription_id: int) -> bool:

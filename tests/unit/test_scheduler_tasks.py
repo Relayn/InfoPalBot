@@ -61,7 +61,7 @@ async def test_format_news_message_success(mock_get_news):
     assert "<b>📰 Последние главные новости (США):</b>" in result
     assert "<a href='http://a.com'>Новость 1</a>" in result
     assert "<a href='http://b.com'>Новость 2</a>" in result
-    mock_get_news.assert_awaited_once_with(page_size=5)
+    mock_get_news.assert_awaited_once_with(category=None, page_size=5)
 
 
 @pytest.mark.asyncio
@@ -71,7 +71,7 @@ async def test_format_news_message_no_articles(mock_get_news):
     mock_get_news.return_value = []  # API вернуло пустой список
     result = await format_news_message()
     assert result is None
-    mock_get_news.assert_awaited_once_with(page_size=5)
+    mock_get_news.assert_awaited_once_with(category=None, page_size=5)
 
 
 @pytest.mark.asyncio
@@ -85,9 +85,11 @@ async def test_format_events_message_success(mock_get_events):
     result = await format_events_message(location_slug)
     city_name = "Москва"  # Ожидаем, что slug 'msk' превратится в 'Москва'
     assert result is not None
-    assert f"<b>🎉 Актуальные события в городе {city_name}:</b>" in result
+    assert f"<b>🎉 Актуальные события в городе {html.escape(city_name)}:</b>" in result
     assert "<a href='http://kudago.com/msk/concert/1'>Концерт</a>" in result
-    mock_get_events.assert_awaited_once_with(location=location_slug, page_size=3)
+    mock_get_events.assert_awaited_once_with(
+        location=location_slug, categories=None, page_size=3
+    )
 
 
 @pytest.mark.asyncio
@@ -98,7 +100,9 @@ async def test_format_events_message_api_error(mock_get_events):
     mock_get_events.return_value = None  # API вернуло None
     result = await format_events_message(location_slug)
     assert result is None
-    mock_get_events.assert_awaited_once_with(location=location_slug, page_size=3)
+    mock_get_events.assert_awaited_once_with(
+        location=location_slug, categories=None, page_size=3
+    )
 
 
 # --- СУЩЕСТВУЮЩИЕ ТЕСТЫ ДЛЯ send_single_notification ---

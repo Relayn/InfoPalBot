@@ -8,6 +8,7 @@ class SubscriptionStates(StatesGroup):
     Состояния для конечного автомата (FSM) управления процессом подписки пользователя.
     """
     choosing_info_type = State()
+    choosing_category = State()  # Новое состояние для выбора категории
     entering_city_weather = State()
     entering_city_events = State()
     choosing_frequency = State()

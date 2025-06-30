@@ -34,19 +34,21 @@ class Subscription(SQLModel, table=True):
     user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)
     info_type: str = Field(index=True)
 
-    # --- ИЗМЕНЕНО: Поля для расписания ---
-    # Для интервальных подписок (например, раз в 3 часа)
-    frequency: Optional[int] = Field(default=None)
-    # Для подписок по расписанию (например, ежедневно в 9:00)
-    cron_expression: Optional[str] = Field(default=None)
+    # Поля для расписания
+    frequency: Optional[int] = Field(default=None)  # Для интервалов (раз в N часов)
+    cron_expression: Optional[str] = Field(default=None)  # Для cron-расписаний
 
-    details: Optional[str] = None
-    status: str = "active"
+    # Поля для уточнения контента
+    details: Optional[str] = Field(default=None, index=True)  # Город для погоды/событий
+    category: Optional[str] = Field(default=None, index=True)  # Категория для новостей/событий
+
+    # Системные поля
+    status: str = Field(default="active", index=True)
     last_sent_at: Optional[datetime] = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    user: Optional["User"] = Relationship(back_populates="subscriptions")
 
+    user: Optional["User"] = Relationship(back_populates="subscriptions")
 
 class Log(SQLModel, table=True):
     # ... (код без изменений) ...

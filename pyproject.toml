@@ -31,5 +31,6 @@ build-backend = "poetry.core.masonry.api"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = [
-    "tests",
+    "tests/unit",
+    "tests/integration",
 ]

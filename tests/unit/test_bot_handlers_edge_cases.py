@@ -63,15 +63,20 @@ async def test_process_events_command_no_events_found(mock_get_events):
 
 
 @pytest.mark.asyncio
-async def test_process_info_type_choice_already_subscribed_to_news():
-    """Тест: Пользователь пытается подписаться на новости, на которые уже подписан."""
+async def test_process_category_choice_already_subscribed_to_news_any_category():
+    """
+    Тест: Пользователь пытается подписаться на новости (любая категория),
+    на которые уже подписан.
+    """
     mock_callback = AsyncMock(spec=CallbackQuery)
     mock_callback.from_user = MagicMock(id=456)
-    mock_callback.data = f"subscribe_type:{INFO_TYPE_NEWS}"
+    mock_callback.data = "subscribe_category:any"  # Выбор "Без категории"
     mock_callback.message = AsyncMock(spec=Message)
     mock_callback.message.edit_text = AsyncMock()
+    mock_callback.answer = AsyncMock()
     fsm_context = await get_mock_fsm_context(
-        initial_state=SubscriptionStates.choosing_info_type
+        initial_state=SubscriptionStates.choosing_category,
+        initial_data={"info_type": INFO_TYPE_NEWS},  # Данные с прошлого шага
     )
 
     with patch("app.bot.handlers.subscription.get_session"), patch(
@@ -80,13 +85,15 @@ async def test_process_info_type_choice_already_subscribed_to_news():
     ), patch(
         "app.bot.handlers.subscription.get_subscription_by_user_and_type",
         return_value=MagicMock(),  # Имитируем, что подписка найдена
-    ), patch(
-        "app.bot.handlers.subscription.log_user_action"
     ):
-        await process_info_type_choice(mock_callback, fsm_context)
+        # Тестируем правильный обработчик
+        from app.bot.handlers.subscription import process_category_choice
 
+        await process_category_choice(mock_callback, fsm_context)
+
+        # Проверяем правильный текст ответа
         mock_callback.message.edit_text.assert_called_once_with(
-            "Вы уже подписаны на 'Новости'."
+            "Вы уже подписаны на 'Новости' (категория: любая)."
         )
         assert await fsm_context.get_state() is None  # FSM должен быть сброшен
 

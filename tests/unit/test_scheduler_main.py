@@ -104,3 +104,83 @@ def test_shutdown_scheduler_when_not_running():
 
         # Проверяем, что метод shutdown НЕ был вызван
         mock_scheduler.shutdown.assert_not_called()
+
+
+@patch("app.scheduler.main.get_session")
+@patch("app.scheduler.main.scheduler")
+def test_schedule_jobs_handles_subscription_with_no_trigger(mock_scheduler, mock_get_session):
+    """
+    Тест: планировщик пропускает подписку без frequency и cron_expression.
+    """
+    # Подписка без триггера
+    sub_no_trigger = Subscription(id=3, user_id=103, info_type="weather", status="active")
+
+    mock_session = MagicMock()
+    mock_session.query.return_value.filter.return_value.all.return_value = [sub_no_trigger]
+    mock_get_session.return_value.__enter__.return_value = mock_session
+
+    with patch("app.scheduler.main.logger.warning") as mock_logger:
+        schedule_jobs()
+        mock_logger.assert_called_once_with(
+            "Подписка ID 3 не имеет ни frequency, ни cron_expression. Пропуск."
+        )
+        mock_scheduler.add_job.assert_not_called()
+
+
+@patch("app.scheduler.main.get_session")
+@patch("app.scheduler.main.scheduler")
+def test_schedule_jobs_handles_add_job_error(mock_scheduler, mock_get_session):
+    """
+    Тест: планировщик логирует ошибку, если не может добавить задачу.
+    """
+    sub1 = Subscription(id=4, user_id=104, info_type="weather", frequency=3, status="active")
+    mock_scheduler.add_job.side_effect = Exception("Test add_job error")
+
+    mock_session = MagicMock()
+    mock_session.query.return_value.filter.return_value.all.return_value = [sub1]
+    mock_get_session.return_value.__enter__.return_value = mock_session
+
+    with patch("app.scheduler.main.logger.error") as mock_logger:
+        schedule_jobs()
+        mock_logger.assert_called_once_with(
+            "Ошибка при добавлении задачи sub_4 в планировщик: Test add_job error", exc_info=True
+        )
+
+
+@patch("app.scheduler.main.get_session", side_effect=Exception("DB connection failed"))
+@patch("app.scheduler.main.scheduler")
+def test_schedule_jobs_handles_db_error(mock_scheduler, mock_get_session):
+    """
+    Тест: планировщик логирует критическую ошибку при сбое подключения к БД.
+    """
+    with patch("app.scheduler.main.logger.error") as mock_logger:
+        schedule_jobs()
+        mock_logger.assert_called_once_with(
+            "Критическая ошибка при получении подписок из БД для планирования: DB connection failed", exc_info=True
+        )
+        mock_scheduler.add_job.assert_not_called()
+
+@patch("app.scheduler.main.logger")
+def test_schedule_jobs_bot_not_set(mock_logger):
+    """
+    Тест: планирование не запускается, если экземпляр бота не установлен.
+    """
+    # Гарантируем, что _bot_instance is None для этого теста
+    with patch("app.scheduler.main._bot_instance", None):
+        schedule_jobs()
+        mock_logger.error.assert_called_once_with(
+            "Экземпляр бота не установлен. Планирование задач невозможно."
+        )
+
+
+@patch("app.scheduler.main.scheduler")
+def test_shutdown_scheduler_not_running_logs_message(mock_scheduler):
+    """
+    Тест: shutdown_scheduler корректно логирует, если планировщик не запущен.
+    """
+    mock_scheduler.running = False
+    with patch("app.scheduler.main.logger.info") as mock_logger:
+        shutdown_scheduler()
+        mock_logger.assert_called_with(
+            "Планировщик APScheduler не был запущен, остановка не требуется."
+        )

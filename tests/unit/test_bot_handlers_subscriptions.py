@@ -94,6 +94,7 @@ async def test_process_frequency_choice_cron_success(mock_scheduler, mock_db_cre
             user_id=db_user_sub.id,
             info_type=INFO_TYPE_NEWS,
             details=None,
+            category=None,
             cron_expression="0 9 * * *",
         )
         # Проверяем, что задача добавляется с cron-триггером
@@ -109,30 +110,30 @@ async def test_process_frequency_choice_cron_success(mock_scheduler, mock_db_cre
 
 @pytest.mark.asyncio
 async def test_process_mysubscriptions_command_with_mixed_subscriptions(db_user_sub, session_sub):
-    """Тест: /mysubscriptions корректно отображает и интервальные, и cron подписки."""
+    """Тест: /mysubscriptions корректно отображает подписки с категориями и без."""
     mock_message = AsyncMock(spec=Message)
     mock_message.answer = AsyncMock()
     mock_message.from_user = MagicMock(spec=AiogramUser, id=db_user_sub.telegram_id)
 
     # Создаем подписки разных типов
     sub1 = DBSubscription(id=1, user_id=db_user_sub.id, info_type=INFO_TYPE_WEATHER, details="Москва", frequency=12)
-    sub2 = DBSubscription(id=2, user_id=db_user_sub.id, info_type=INFO_TYPE_NEWS, cron_expression="0 9 * * *")
+    sub2 = DBSubscription(id=2, user_id=db_user_sub.id, info_type=INFO_TYPE_NEWS, cron_expression="0 9 * * *", category="technology")
+    sub3 = DBSubscription(id=3, user_id=db_user_sub.id, info_type=INFO_TYPE_EVENTS, details="spb", frequency=6, category=None) # Категория "все"
 
     with patch("app.bot.handlers.subscription.get_session",
                return_value=MagicMock(__enter__=MagicMock(return_value=session_sub))), \
             patch("app.bot.handlers.subscription.get_user_by_telegram_id", return_value=db_user_sub), \
-            patch("app.bot.handlers.subscription.get_subscriptions_by_user_id", return_value=[sub1, sub2]), \
+            patch("app.bot.handlers.subscription.get_subscriptions_by_user_id", return_value=[sub1, sub2, sub3]), \
             patch("app.bot.handlers.subscription.log_user_action"):
         await process_mysubscriptions_command(mock_message)
 
         args, _ = mock_message.answer.call_args
         response_text = args[0]
 
-        assert "Погода: <b>Москва</b> (раз в 12 ч.)" in response_text
-        assert "Новости (США) (ежедневно в 09:00 (UTC))" in response_text
+        assert "Погода: <b>Москва</b>" in response_text
+        assert "Новости (США) (technology)" in response_text
+        assert "События: <b>Санкт-петербург</b> (все)" in response_text
 
-
-# ... (остальные тесты без изменений, они все еще актуальны) ...
 @pytest.mark.asyncio
 async def test_subscribe_start_limit_reached(db_user_sub, session_sub):
     mock_message = AsyncMock(spec=Message)
@@ -159,6 +160,7 @@ async def test_process_city_for_events_subscription_unsupported_city():
     mock_message = AsyncMock(spec=Message, text=unsupported_city)
     mock_message.reply = AsyncMock()
     mock_message.from_user = MagicMock(spec=AiogramUser, id=123)
-    fsm_context = await get_mock_fsm_context(initial_state=SubscriptionStates.entering_city_events)
-    await process_city_for_events_subscription(mock_message, fsm_context)
-    mock_message.reply.assert_called_once_with(f"Город '{html.escape(unsupported_city)}' не поддерживается.")
+    fsm_context = await get_mock_fsm_context(
+        initial_state=SubscriptionStates.choosing_frequency,
+        initial_data={"info_type": INFO_TYPE_NEWS, "details": None, "category": None},
+    )

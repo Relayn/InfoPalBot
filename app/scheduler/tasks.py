@@ -1,5 +1,3 @@
-# Файл: app/scheduler/tasks.py
-
 import logging
 import html
 from typing import Optional
@@ -11,13 +9,19 @@ from sqlmodel import Session, select
 from app.api_clients.events import get_kudago_events
 from app.api_clients.news import get_top_headlines
 from app.api_clients.weather import get_weather_data
-from app.bot.constants import INFO_TYPE_WEATHER, INFO_TYPE_NEWS, INFO_TYPE_EVENTS, KUDAGO_LOCATION_SLUGS
+from app.bot.constants import (
+    INFO_TYPE_WEATHER,
+    INFO_TYPE_NEWS,
+    INFO_TYPE_EVENTS,
+    KUDAGO_LOCATION_SLUGS,
+    NEWS_CATEGORIES,
+    EVENTS_CATEGORIES,
+)
 from app.database.crud import delete_subscription
 from app.database.models import Subscription, User
 from app.database.session import get_session
 
 logger = logging.getLogger(__name__)
-
 
 async def format_weather_message(details: str) -> Optional[str]:
     # ... (код без изменений) ...
@@ -41,36 +45,53 @@ async def format_weather_message(details: str) -> Optional[str]:
         return None
 
 
-async def format_news_message() -> Optional[str]:
-    # ... (код без изменений) ...
-    articles = await get_top_headlines(page_size=5)
+async def format_news_message(category: Optional[str] = None) -> Optional[str]:
+    """Форматирует сообщение с новостями, опционально по категории."""
+    articles = await get_top_headlines(category=category, page_size=5)
     if not isinstance(articles, list) or not articles:
-        logger.warning("Не удалось получить новости в задаче планировщика.")
+        logger.warning(
+            f"Не удалось получить новости для категории '{category}' в задаче планировщика."
+        )
         return None
 
-    response_lines = ["<b>📰 Последние главные новости (США):</b>"]
+    category_display_name = NEWS_CATEGORIES.get(category)
+    category_header = f" ({category_display_name})" if category_display_name else ""
+    response_lines = [f"<b>📰 Последние главные новости (США){category_header}:</b>"]
+
     for i, article in enumerate(articles):
         title = html.escape(article.get("title", "Без заголовка"))
         url = article.get("url", "#")
         response_lines.append(f"{i + 1}. <a href='{url}'>{title}</a>")
     return "\n".join(response_lines)
 
-
-async def format_events_message(location_slug: str) -> Optional[str]:
-    # ... (код без изменений) ...
-    events = await get_kudago_events(location=location_slug, page_size=3)
+async def format_events_message(
+    location_slug: str, category: Optional[str] = None
+) -> Optional[str]:
+    """Форматирует сообщение о событиях, опционально по категории."""
+    events = await get_kudago_events(
+        location=location_slug, categories=category, page_size=3
+    )
     if not isinstance(events, list) or not events:
-        logger.warning(f"Не удалось получить события для '{location_slug}' в задаче планировщика.")
+        logger.warning(
+            f"Не удалось получить события для '{location_slug}' (категория: {category}) в задаче планировщика."
+        )
         return None
 
-    city_display_name = next((name.capitalize() for name, slug in KUDAGO_LOCATION_SLUGS.items() if slug == location_slug), location_slug)
-    response_lines = [f"<b>🎉 Актуальные события в городе {html.escape(city_display_name)}:</b>"]
+    city_display_name = next(
+        (name.capitalize() for name, slug in KUDAGO_LOCATION_SLUGS.items() if slug == location_slug),
+        location_slug,
+    )
+    category_display_name = EVENTS_CATEGORIES.get(category)
+    category_header = f" ({category_display_name})" if category_display_name else ""
+    response_lines = [
+        f"<b>🎉 Актуальные события в городе {html.escape(city_display_name)}{category_header}:</b>"
+    ]
+
     for i, event in enumerate(events):
         title = html.escape(event.get("title", "Без заголовка"))
         site_url = event.get("site_url", "#")
         response_lines.append(f"{i + 1}. <a href='{site_url}'>{title}</a>")
     return "\n\n".join(response_lines)
-
 
 async def send_single_notification(bot: Bot, subscription_id: int):
     """
@@ -95,9 +116,11 @@ async def send_single_notification(bot: Bot, subscription_id: int):
         if subscription.info_type == INFO_TYPE_WEATHER:
             message_text = await format_weather_message(subscription.details)
         elif subscription.info_type == INFO_TYPE_NEWS:
-            message_text = await format_news_message()
+            message_text = await format_news_message(category=subscription.category)
         elif subscription.info_type == INFO_TYPE_EVENTS:
-            message_text = await format_events_message(subscription.details)
+            message_text = await format_events_message(
+                location_slug=subscription.details, category=subscription.category
+            )
 
         if not message_text:
             logger.warning(f"Не удалось сформировать сообщение для подписки ID {subscription_id}. Пропуск отправки.")
