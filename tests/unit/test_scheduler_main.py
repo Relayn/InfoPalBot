@@ -1,21 +1,9 @@
-# Файл: tests/unit/test_scheduler_main.py
-
 import pytest
 from unittest.mock import MagicMock, patch, ANY
 from aiogram import Bot
-
-# ИЗМЕНЕНО: убран PropertyMock, он здесь не нужен
-# from unittest.mock import MagicMock, patch, ANY, PropertyMock
-
-# ИЗМЕНЕНО: импортируем только то, что нужно для тестов
 from app.scheduler.main import set_bot_instance, schedule_jobs, shutdown_scheduler
 from app.database.models import Subscription
 
-
-# В этом файле фикстура autouse не нужна, так как мы будем мокать сам планировщик
-# @pytest.fixture(autouse=True)
-# def reset_scheduler():
-#     ...
 
 def test_set_bot_instance():
     """
@@ -50,13 +38,12 @@ def test_schedule_jobs_with_active_subscriptions(mock_scheduler, mock_get_sessio
     assert mock_scheduler.add_job.call_count == 2
     mock_scheduler.add_job.assert_any_call(
         ANY, trigger="interval", hours=3, id="sub_1",
-        kwargs={"subscription_id": 1}, replace_existing=True, next_run_time=ANY
+        kwargs={"bot": ANY, "subscription_id": 1}, replace_existing=True, next_run_time=ANY
     )
     mock_scheduler.add_job.assert_any_call(
         ANY, trigger="interval", hours=6, id="sub_2",
-        kwargs={"subscription_id": 2}, replace_existing=True, next_run_time=ANY
+        kwargs={"bot": ANY, "subscription_id": 2}, replace_existing=True, next_run_time=ANY
     )
-
 
 @patch("app.scheduler.main.get_session")
 @patch("app.scheduler.main.scheduler")  # Патчим сам планировщик

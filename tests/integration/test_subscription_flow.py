@@ -1,5 +1,3 @@
-# Файл: tests/integration/test_subscription_flow.py
-
 import pytest
 import html
 from unittest.mock import AsyncMock, MagicMock, patch, ANY

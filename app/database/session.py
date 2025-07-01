@@ -28,11 +28,6 @@ from sqlalchemy.engine import Engine
 from sqlmodel import create_engine, SQLModel, Session  # Импортируем необходимые классы
 from app.config import settings  # Импортируем настройки приложения
 
-# Импортируем все модели, чтобы SQLModel.metadata.create_all() знал о них
-# и мог создать соответствующие таблицы в базе данных.
-from app.database.models import User, Subscription, Log
-
-
 # Слушатель событий SQLAlchemy, который выполняется при каждом новом соединении с БД.
 @event.listens_for(Engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
@@ -59,13 +54,6 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 
-
-# Создаем движок базы данных.
-# settings.DATABASE_URL берется из конфигурации приложения (например, из .env).
-# echo=False: не выводить SQL-запросы в консоль (для production). Для отладки можно установить в True.
-# connect_args={"check_same_thread": False}: необходим для SQLite при асинхронном использовании
-# (например, с FastAPI или Aiogram), так как SQLite по умолчанию разрешает доступ только из того же потока,
-# который установил соединение. Для других БД этот аргумент не нужен.
 engine = create_engine(
     settings.DATABASE_URL, echo=False, connect_args={"check_same_thread": False}
 )

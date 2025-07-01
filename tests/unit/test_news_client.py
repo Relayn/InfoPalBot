@@ -1,6 +1,5 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
-# ИЗМЕНЕНО: импортируем timezone
 from datetime import datetime, timedelta, timezone
 import httpx
 
@@ -12,7 +11,6 @@ from app.config import settings
 async def test_get_latest_news_success_with_from_date():
     """Тест: успешное получение новостей с указанной датой."""
     query = "test"
-    # ИЗМЕНЕНО: используем timezone-aware datetime
     from_date = datetime.now(timezone.utc) - timedelta(days=5)
     mock_response_data = {
         "status": "ok",
@@ -29,7 +27,6 @@ async def test_get_latest_news_success_with_from_date():
     assert isinstance(articles, list)
     assert articles[0]["title"] == "Test Article"
 
-# ... (остальной код без изменений, так как другие тесты не используют from_date напрямую) ...
 @pytest.mark.asyncio
 async def test_get_latest_news_success_without_from_date():
     """Тест: успешное получение новостей без указания даты (по умолчанию за последние 24 часа)."""
@@ -77,7 +74,6 @@ async def test_get_latest_news_no_api_key():
 async def test_get_latest_news_no_articles_with_from_date():
     """Тест: API возвращает пустой список статей для запроса с датой."""
     query = "no_results"
-    # ИЗМЕНЕНО: используем timezone-aware datetime
     from_date = datetime.now(timezone.utc) - timedelta(days=1)
     mock_response_data = {"status": "ok", "articles": []}
     mock_response = MagicMock(spec=httpx.Response)

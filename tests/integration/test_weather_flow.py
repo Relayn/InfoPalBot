@@ -4,8 +4,6 @@ import html
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 
 from sqlmodel import Session, select
-
-# Импорт из нового модуля
 from app.bot.handlers.info_requests import process_weather_command
 
 from app.config import settings as app_settings

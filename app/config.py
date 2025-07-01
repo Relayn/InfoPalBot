@@ -15,11 +15,8 @@
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from dotenv import load_dotenv  # Для явной загрузки .env файла
+from dotenv import load_dotenv
 
-# Явно загружаем переменные из .env файла в текущее окружение.
-# Это необходимо, если скрипт запускается не из корневой директории проекта,
-# или если pydantic-settings не находит .env автоматически в данном контексте.
 load_dotenv()
 
 
@@ -56,7 +53,7 @@ class Settings(BaseSettings):
     )
 
     # Настройки Telegram бота
-    TELEGRAM_BOT_TOKEN: str  # Токен Telegram бота. Получается у @BotFather.
+    TELEGRAM_BOT_TOKEN: str
     # Обязательное поле, без него бот не запустится.
 
     # Настройки базы данных

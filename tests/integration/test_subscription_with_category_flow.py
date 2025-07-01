@@ -7,7 +7,6 @@ from app.bot.handlers.subscription import (
     process_subscribe_command_start,
     process_info_type_choice,
     process_category_choice,
-    process_city_for_events_subscription,
     process_frequency_choice,
 )
 from app.bot.fsm import SubscriptionStates
@@ -55,15 +54,26 @@ async def test_full_subscribe_to_events_with_category_flow(integration_session: 
         cb_category.message.edit_text = AsyncMock()
         cb_category.answer = AsyncMock()
         await process_category_choice(cb_category, fsm_context)
-        assert await fsm_context.get_state() == SubscriptionStates.entering_city_events
+        assert await fsm_context.get_state() == SubscriptionStates.prompting_city_search
 
-        # --- Step 4: Enter city 'Москва' ---
-        msg_city = AsyncMock(spec=Message, text="Москва", from_user=MagicMock(id=telegram_user_id))
-        msg_city.answer = AsyncMock()
-        await process_city_for_events_subscription(msg_city, fsm_context)
+        # --- Step 4: Search for city 'Мос' ---
+        from app.bot.handlers.subscription import process_city_search, process_city_selection
+
+        msg_search = AsyncMock(spec=Message, text="Мос", from_user=MagicMock(id=telegram_user_id))
+        msg_search.answer = AsyncMock()
+        await process_city_search(msg_search, fsm_context)
+        assert await fsm_context.get_state() == SubscriptionStates.choosing_city_from_list
+
+        # --- Step 5: Select city 'Москва' ---
+        cb_city = AsyncMock(spec=CallbackQuery, from_user=MagicMock(id=telegram_user_id),
+                            data="city_select:Москва")
+        cb_city.message = AsyncMock(spec=Message)
+        cb_city.message.edit_text = AsyncMock()
+        cb_city.answer = AsyncMock()
+        await process_city_selection(cb_city, fsm_context)
         assert await fsm_context.get_state() == SubscriptionStates.choosing_frequency
 
-        # --- Step 5: Choose frequency '24h' ---
+        # --- Step 6: Choose frequency '24h' ---
         cb_freq = AsyncMock(spec=CallbackQuery, from_user=MagicMock(id=telegram_user_id), data="frequency:24")
         cb_freq.message = AsyncMock(spec=Message)
         cb_freq.message.edit_text = AsyncMock()

@@ -10,7 +10,7 @@ from app.bot.handlers.info_requests import (
 from aiogram.types import Message, User as AiogramUser, Chat
 from aiogram.filters import CommandObject
 
-# ... (тесты для погоды без изменений) ...
+# ... тесты для погоды ...
 @pytest.mark.asyncio
 async def test_process_weather_command_success():
     city_name = "Москва"
@@ -97,7 +97,7 @@ async def test_process_news_command_success():
             ANY, mock_message.from_user.id, "/news", "success, country=us"
         )
 
-# ... (тесты для событий без изменений) ...
+# ... тесты для событий ...
 @pytest.mark.asyncio
 async def test_process_events_command_success():
     city_arg = "Москва"

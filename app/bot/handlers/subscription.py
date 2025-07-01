@@ -15,7 +15,12 @@ from ..constants import (
     KUDAGO_LOCATION_SLUGS,
 )
 from ..fsm import SubscriptionStates
-from ..keyboards import get_frequency_keyboard, get_categories_keyboard
+from ..keyboards import (
+    get_frequency_keyboard,
+    get_categories_keyboard,
+    get_city_selection_keyboard,
+)
+from ..data.cities import RUSSIAN_CITIES
 
 from app.database.crud import (
     create_subscription as db_create_subscription,
@@ -80,8 +85,11 @@ async def process_info_type_choice(callback_query: types.CallbackQuery, state: F
         )
         await state.set_state(SubscriptionStates.choosing_category)
     elif info_type == INFO_TYPE_WEATHER:
-        await callback_query.message.edit_text("Вы выбрали 'Погода'.\nВведите город:")
-        await state.set_state(SubscriptionStates.entering_city_weather)
+        await callback_query.message.edit_text(
+            "Вы выбрали 'Погода'.\n"
+            "Начните вводить название города (минимум 3 буквы), и я предложу варианты."
+        )
+        await state.set_state(SubscriptionStates.prompting_city_search)
 
     await callback_query.answer()
 
@@ -134,63 +142,94 @@ async def process_category_choice(callback_query: types.CallbackQuery, state: FS
         await state.set_state(SubscriptionStates.choosing_frequency)
     elif info_type == INFO_TYPE_EVENTS:
         await callback_query.message.edit_text(
-            "Категория выбрана. Теперь введите город (например, Москва или спб):"
+            "Категория выбрана. Теперь начните вводить название города (минимум 3 буквы):"
         )
-        await state.set_state(SubscriptionStates.entering_city_events)
+        await state.set_state(SubscriptionStates.prompting_city_search)
 
     await callback_query.answer()
 
 
-@router.message(StateFilter(SubscriptionStates.entering_city_weather), F.text)
-async def process_city_for_weather_subscription(message: types.Message, state: FSMContext):
-    # ... (код без изменений) ...
-    city_name = message.text.strip()
-    if not city_name:
-        await message.reply("Название города не может быть пустым.")
+@router.message(StateFilter(SubscriptionStates.prompting_city_search), F.text)
+async def process_city_search(message: types.Message, state: FSMContext):
+    """
+    Обрабатывает ввод пользователя для поиска города.
+    """
+    if not message.text:
         return
-    with get_session() as db_session:
-        user = get_user_by_telegram_id(session=db_session, telegram_id=message.from_user.id)
-        if get_subscription_by_user_and_type(db_session, user.id, INFO_TYPE_WEATHER, city_name):
-            await message.answer(f"Вы уже подписаны на погоду в городе '{html.escape(city_name)}'.")
-            await state.clear()
-            return
-    await state.update_data(details=city_name)
-    await message.answer(f"Город '{html.escape(city_name)}' принят.\nВыберите частоту:",
-                         reply_markup=get_frequency_keyboard())
-    await state.set_state(SubscriptionStates.choosing_frequency)
+    query = message.text.strip()
+    if len(query) < 3:
+        await message.answer("Пожалуйста, введите минимум 3 буквы для поиска.")
+        return
+
+    # Ищем города, содержащие запрос пользователя (без учета регистра)
+    found_cities = [
+        city for city in RUSSIAN_CITIES if query.lower() in city.lower()
+    ]
+
+    if not found_cities:
+        await message.answer(
+            "К сожалению, по вашему запросу ничего не найдено. Попробуйте еще раз."
+        )
+        return
+
+    # Ограничиваем количество кнопок для удобства
+    keyboard = get_city_selection_keyboard(found_cities[:10])
+    await message.answer(
+        "Вот что удалось найти. Пожалуйста, выберите ваш город:", reply_markup=keyboard
+    )
+    await state.set_state(SubscriptionStates.choosing_city_from_list)
 
 
-@router.message(StateFilter(SubscriptionStates.entering_city_events), F.text)
-async def process_city_for_events_subscription(message: types.Message, state: FSMContext):
-    city_name = message.text.strip()
-    location_slug = KUDAGO_LOCATION_SLUGS.get(city_name.lower())
-    if not location_slug:
-        await message.reply(f"Город '{html.escape(city_name)}' не поддерживается.")
-        return
+@router.callback_query(
+    StateFilter(SubscriptionStates.choosing_city_from_list),
+    F.data.startswith("city_select:"),
+)
+async def process_city_selection(callback_query: types.CallbackQuery, state: FSMContext):
+    """
+    Обрабатывает выбор города из предложенного списка.
+    """
+    await callback_query.answer()
+    selected_city = callback_query.data.split(":", 1)[1]
 
     user_data = await state.get_data()
+    info_type = user_data.get("info_type")
     category = user_data.get("category")
+    details_to_save = selected_city  # По умолчанию для погоды
 
+    # Для событий нужно получить slug
+    if info_type == INFO_TYPE_EVENTS:
+        location_slug = KUDAGO_LOCATION_SLUGS.get(selected_city.lower())
+        if not location_slug:
+            await callback_query.message.edit_text(
+                f"К сожалению, город '{html.escape(selected_city)}' больше не поддерживается для событий. "
+                "Пожалуйста, начните подписку заново с помощью /subscribe."
+            )
+            await state.clear()
+            return
+        details_to_save = location_slug
+
+    # Проверка на дубликат подписки
     with get_session() as db_session:
-        user = get_user_by_telegram_id(session=db_session, telegram_id=message.from_user.id)
+        user = get_user_by_telegram_id(
+            session=db_session, telegram_id=callback_query.from_user.id
+        )
         if get_subscription_by_user_and_type(
-            db_session, user.id, INFO_TYPE_EVENTS, location_slug, category
+            db_session, user.id, info_type, details_to_save, category
         ):
-            await message.answer(
-                f"У вас уже есть такая подписка (События: {html.escape(city_name)}, Категория: {category or 'любая'})."
+            await callback_query.message.edit_text(
+                f"У вас уже есть такая подписка."
             )
             await state.clear()
             return
 
-    await state.update_data(details=location_slug)
-    await message.answer(
-        f"Город '{html.escape(city_name)}' принят.\nВыберите частоту:",
+    await state.update_data(details=details_to_save)
+    await callback_query.message.edit_text(
+        f"Город '{html.escape(selected_city)}' выбран.\nТеперь выберите частоту:",
         reply_markup=get_frequency_keyboard(),
     )
     await state.set_state(SubscriptionStates.choosing_frequency)
 
 
-# --- ИЗМЕНЕНО: Обработчик выбора частоты ---
 @router.callback_query(
     StateFilter(SubscriptionStates.choosing_frequency),
     F.data.startswith("frequency:") | F.data.startswith("cron:"),
@@ -204,7 +243,6 @@ async def process_frequency_choice(callback_query: types.CallbackQuery, state: F
     telegram_id = callback_query.from_user.id
     user_data = await state.get_data()
 
-    # Параметры для создания подписки и задачи
     sub_params = {}
     job_params = {}
     callback_data = callback_query.data
@@ -217,7 +255,7 @@ async def process_frequency_choice(callback_query: types.CallbackQuery, state: F
     elif callback_data.startswith("cron:"):
         time_str = callback_data.split(":", 1)[1]
         hour, minute = map(int, time_str.split(":"))
-        cron_expr = f"{minute} {hour} * * *"  # APScheduler cron format
+        cron_expr = f"{minute} {hour} * * *"
         sub_params["cron_expression"] = cron_expr
         job_params = {"trigger": "cron", "hour": hour, "minute": minute}
         log_details = f"Data: {user_data}, Cron: {time_str}"
@@ -225,9 +263,13 @@ async def process_frequency_choice(callback_query: types.CallbackQuery, state: F
         await callback_query.message.edit_text("Произошла ошибка. Попробуйте снова.")
         return
 
-    new_subscription = None
     with get_session() as db_session:
         user = get_user_by_telegram_id(session=db_session, telegram_id=telegram_id)
+        if not user:
+            await callback_query.message.edit_text("Ошибка: ваш профиль не найден.")
+            await state.clear()
+            return
+
         new_subscription = db_create_subscription(
             session=db_session,
             user_id=user.id,
@@ -238,36 +280,45 @@ async def process_frequency_choice(callback_query: types.CallbackQuery, state: F
         )
         log_user_action(db_session, telegram_id, "subscribe_finish", log_details)
 
-    if new_subscription:
-        job_id = f"sub_{new_subscription.id}"
-        try:
-            # Запускаем первую отправку немедленно для лучшего UX
-            # await send_single_notification(bot=callback_query.bot, subscription_id=new_subscription.id)
-
-            scheduler.add_job(
-                send_single_notification,
-                id=job_id,
-                kwargs={"subscription_id": new_subscription.id},
-                replace_existing=True,
-                # Убираем next_run_time, чтобы он сработал согласно триггеру
-                **job_params,
-            )
-            logger.info(f"Задача {job_id} динамически добавлена в планировщик. Params: {job_params}")
-            await callback_query.message.edit_text("Вы успешно подписались!")
-        except Exception as e:
-            logger.error(f"Ошибка при добавлении задачи {job_id} в планировщик: {e}", exc_info=True)
+        if new_subscription and new_subscription.id:
+            job_id = f"sub_{new_subscription.id}"
+            job_kwargs = {
+                "bot": callback_query.bot,
+                "subscription_id": new_subscription.id,
+            }
+            try:
+                scheduler.add_job(
+                    send_single_notification,
+                    id=job_id,
+                    kwargs=job_kwargs,
+                    replace_existing=True,
+                    **job_params,
+                )
+                logger.info(
+                    f"Задача {job_id} динамически добавлена. Params: {job_params}"
+                )
+                await callback_query.message.edit_text("Вы успешно подписались!")
+            except Exception as e:
+                logger.error(
+                    f"Ошибка при добавлении задачи {job_id} в планировщик: {e}",
+                    exc_info=True,
+                )
+                await callback_query.message.edit_text(
+                    "Подписка создана, но произошла ошибка с ее активацией. Обратитесь к администратору."
+                )
+        else:
             await callback_query.message.edit_text(
-                "Подписка создана, но произошла ошибка с ее активацией. Обратитесь к администратору."
+                "Произошла ошибка при создании подписки."
             )
-    else:
-        await callback_query.message.edit_text("Произошла ошибка при создании подписки.")
 
     await state.clear()
 
 
-# --- ИЗМЕНЕНО: Отображение подписок ---
 @router.message(Command("mysubscriptions"))
 async def process_mysubscriptions_command(message: types.Message):
+    await message.answer(
+        "💡 Для более удобного управления подписками воспользуйтесь командой /profile."
+    )
     telegram_id = message.from_user.id
     with get_session() as db_session:
         user = get_user_by_telegram_id(session=db_session, telegram_id=telegram_id)
@@ -349,7 +400,6 @@ async def process_unsubscribe_command_start(message: types.Message, state: FSMCo
 
 @router.callback_query(F.data.startswith("unsubscribe_confirm:"))
 async def process_unsubscribe_confirm(callback_query: types.CallbackQuery, state: FSMContext):
-    # ... (код без изменений) ...
     await callback_query.answer()
     sub_id = int(callback_query.data.split(":")[1])
     telegram_id = callback_query.from_user.id
@@ -380,7 +430,6 @@ async def process_unsubscribe_confirm(callback_query: types.CallbackQuery, state
 
 @router.callback_query(F.data == "unsubscribe_action_cancel")
 async def process_unsubscribe_action_cancel(callback_query: types.CallbackQuery, state: FSMContext):
-    # ... (код без изменений) ...
     await callback_query.answer()
     await callback_query.message.edit_text("Операция отписки отменена.")
     with get_session() as db_session:

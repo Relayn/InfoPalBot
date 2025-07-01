@@ -50,7 +50,6 @@ async def test_news_command_successful_flow(integration_session: Session):
         )
         await process_news_command(mock_message)
 
-    # ИЗМЕНЕНО: Ожидаемый текст теперь соответствует актуальной логике
     mock_message.reply.assert_called_once_with(
         "Запрашиваю последние главные новости для США..."
     )
@@ -58,6 +57,5 @@ async def test_news_command_successful_flow(integration_session: Session):
         select(Log).where(Log.command == "/news").where(Log.user_id == db_user.id)
     ).first()
     assert log_entry is not None
-    # ИЗМЕНЕНО: Детали лога также обновлены для консистентности
     assert log_entry.details == "success, country=us"
     app_settings.NEWS_API_KEY = original_news_key

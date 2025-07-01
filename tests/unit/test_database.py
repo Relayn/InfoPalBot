@@ -234,5 +234,4 @@ def test_get_session_closes_on_exception():
 
         # Проверяем, что сессия была создана с правильным движком
         mock_session_class.assert_called_once_with(engine)
-        # Главная проверка: метод close() был вызван в блоке finally
         mock_session_instance.close.assert_called_once()

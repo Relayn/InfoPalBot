@@ -1,5 +1,3 @@
-# Файл: app/bot/handlers/info_requests.py
-
 import logging
 import html
 from typing import Optional
@@ -89,7 +87,6 @@ async def process_news_command(message: types.Message):
     Обрабатывает команду /news.
     """
     telegram_id: int = message.from_user.id
-    # --- ИЗМЕНЕНО: текст сообщения ---
     await message.reply("Запрашиваю последние главные новости для США...")
 
     with get_session() as db_session:
@@ -98,7 +95,6 @@ async def process_news_command(message: types.Message):
         log_status_details = "unknown_error"
 
         if isinstance(articles, list) and articles:
-            # --- ИЗМЕНЕНО: заголовок в ответе ---
             response_lines = ["<b>📰 Последние главные новости (США):</b>"]
             for i, article in enumerate(articles):
                 title = html.escape(article.get("title", "Без заголовка"))

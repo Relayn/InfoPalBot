@@ -6,8 +6,9 @@ services:
       - .env
     restart: always
     volumes:
-      - ./app/database:/app/database
+      - ./app/database:/app/app/database
+    command: sh -c "alembic upgrade head && python -m app.bot.main"
 
 networks:
   default:
-    driver: bridge 
+    driver: bridge

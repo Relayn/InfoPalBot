@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch, ANY
 from app.bot.handlers.info_requests import process_news_command, process_events_command
 from app.bot.handlers.subscription import (
     process_info_type_choice,
-    process_city_for_weather_subscription,
     process_frequency_choice,
     process_unsubscribe_confirm,
 )
@@ -70,13 +69,13 @@ async def test_process_category_choice_already_subscribed_to_news_any_category()
     """
     mock_callback = AsyncMock(spec=CallbackQuery)
     mock_callback.from_user = MagicMock(id=456)
-    mock_callback.data = "subscribe_category:any"  # Выбор "Без категории"
+    mock_callback.data = "subscribe_category:any"
     mock_callback.message = AsyncMock(spec=Message)
     mock_callback.message.edit_text = AsyncMock()
     mock_callback.answer = AsyncMock()
     fsm_context = await get_mock_fsm_context(
         initial_state=SubscriptionStates.choosing_category,
-        initial_data={"info_type": INFO_TYPE_NEWS},  # Данные с прошлого шага
+        initial_data={"info_type": INFO_TYPE_NEWS},
     )
 
     with patch("app.bot.handlers.subscription.get_session"), patch(
@@ -96,33 +95,6 @@ async def test_process_category_choice_already_subscribed_to_news_any_category()
             "Вы уже подписаны на 'Новости' (категория: любая)."
         )
         assert await fsm_context.get_state() is None  # FSM должен быть сброшен
-
-
-@pytest.mark.asyncio
-async def test_process_city_for_weather_already_subscribed():
-    """Тест: Пользователь вводит город для подписки на погоду, на который уже подписан."""
-    city_name = "Москва"
-    mock_message = AsyncMock(spec=Message, text=city_name)
-    mock_message.answer = AsyncMock()
-    mock_message.from_user = MagicMock(id=456)
-    fsm_context = await get_mock_fsm_context(
-        initial_state=SubscriptionStates.entering_city_weather
-    )
-
-    with patch("app.bot.handlers.subscription.get_session"), patch(
-        "app.bot.handlers.subscription.get_user_by_telegram_id",
-        return_value=MagicMock(id=1),
-    ), patch(
-        "app.bot.handlers.subscription.get_subscription_by_user_and_type",
-        return_value=MagicMock(),  # Имитируем, что подписка найдена
-    ):
-        await process_city_for_weather_subscription(mock_message, fsm_context)
-
-        mock_message.answer.assert_called_once_with(
-            f"Вы уже подписаны на погоду в городе '{html.escape(city_name)}'."
-        )
-        assert await fsm_context.get_state() is None  # FSM должен быть сброшен
-
 
 @pytest.mark.asyncio
 @patch("app.bot.handlers.subscription.db_create_subscription")

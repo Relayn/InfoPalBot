@@ -1,12 +1,9 @@
-# Файл: tests/unit/test_scheduler_tasks.py
-
 import pytest
 import html
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 
-# Импортируем все тестируемые функции
 from app.scheduler.tasks import (
     send_single_notification,
     format_weather_message,
@@ -17,7 +14,7 @@ from app.database.models import Subscription, User
 from app.bot.constants import INFO_TYPE_WEATHER, INFO_TYPE_NEWS, KUDAGO_LOCATION_SLUGS
 
 
-# --- НОВЫЕ ТЕСТЫ ДЛЯ ФУНКЦИЙ ФОРМАТИРОВАНИЯ ---
+# --- ТЕСТЫ ДЛЯ ФУНКЦИЙ ФОРМАТИРОВАНИЯ ---
 
 @pytest.mark.asyncio
 @patch("app.scheduler.tasks.get_weather_data")
@@ -105,8 +102,7 @@ async def test_format_events_message_api_error(mock_get_events):
     )
 
 
-# --- СУЩЕСТВУЮЩИЕ ТЕСТЫ ДЛЯ send_single_notification ---
-
+# --- ТЕСТЫ ДЛЯ send_single_notification ---
 
 @pytest.mark.asyncio
 async def test_send_single_notification_success_weather():

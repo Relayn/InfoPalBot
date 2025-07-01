@@ -1,5 +1,3 @@
-# Файл: app/bot/main.py
-
 import logging
 import asyncio
 
@@ -11,8 +9,7 @@ from app.config import settings
 from app.database.session import create_db_and_tables
 from app.scheduler.main import set_bot_instance, schedule_jobs, scheduler as aps_scheduler, shutdown_scheduler
 
-# Импортируем роутеры из новых модулей
-from app.bot.handlers import basic, info_requests, subscription
+from app.bot.handlers import basic, info_requests, subscription, profile
 
 # Настройка логирования
 logging.basicConfig(
@@ -38,12 +35,13 @@ async def on_startup():
     commands_to_set = [
         types.BotCommand(command="start", description="🚀 Запуск и регистрация"),
         types.BotCommand(command="help", description="❓ Помощь по командам"),
+        types.BotCommand(command="profile", description="👤 Мой профиль и подписки"),
         types.BotCommand(command="weather", description="☀️ Узнать погоду (город)"),
         types.BotCommand(command="news", description="📰 Последние новости (Россия)"),
         types.BotCommand(command="events", description="🎉 События (город)"),
         types.BotCommand(command="subscribe", description="🔔 Подписаться на рассылку"),
-        types.BotCommand(command="mysubscriptions", description="📜 Мои подписки"),
-        types.BotCommand(command="unsubscribe", description="🔕 Отписаться от рассылки"),
+        types.BotCommand(command="mysubscriptions", description="📜 Мои подписки (старый)"),
+        types.BotCommand(command="unsubscribe", description="🔕 Отписаться (старый)"),
         types.BotCommand(command="cancel", description="❌ Отменить текущее действие"),
     ]
     try:
@@ -79,6 +77,7 @@ def main():
     dp.include_router(basic.router)
     dp.include_router(info_requests.router)
     dp.include_router(subscription.router)
+    dp.include_router(profile.router)
 
     # Регистрируем функции жизненного цикла
     dp.startup.register(on_startup)

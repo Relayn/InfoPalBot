@@ -1,5 +1,3 @@
-# Файл: app/scheduler/main.py
-
 import logging
 from typing import Optional
 
@@ -57,7 +55,7 @@ def schedule_jobs():
                 job_id = f"sub_{sub.id}"
                 job_params = {}
 
-                # --- ИЗМЕНЕНО: Логика выбора типа триггера ---
+                # --- Логика выбора типа триггера ---
                 if sub.frequency:
                     job_params = {"trigger": "interval", "hours": sub.frequency}
                     log_msg = f"интервалом {sub.frequency} ч."
@@ -70,13 +68,17 @@ def schedule_jobs():
                     continue
 
                 try:
+                    job_kwargs = {
+                        "bot": _bot_instance,
+                        "subscription_id": sub.id,
+                    }
                     scheduler.add_job(
                         send_single_notification,
                         id=job_id,
-                        kwargs={"subscription_id": sub.id},
+                        kwargs=job_kwargs,
                         replace_existing=True,
                         next_run_time=datetime.now(timezone.utc),
-                        **job_params
+                        **job_params,
                     )
                     logger.info(
                         f"Задача {job_id} для подписки (type: {sub.info_type}, user: {sub.user_id}) запланирована с {log_msg}")

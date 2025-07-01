@@ -4,7 +4,6 @@
 
 import logging
 from typing import Optional, List, Dict, Any, Union
-# ИЗМЕНЕНО: импортируем timezone
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -20,7 +19,6 @@ async def get_top_headlines(
     category: Optional[str] = None,
     page_size: int = 10,
 ) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
-    # ... (код без изменений) ...
     if not settings.NEWS_API_KEY:
         logger.error("Ключ NEWS_API_KEY не настроен.")
         return {"error": True, "message": "Ключ API для новостей не настроен."}

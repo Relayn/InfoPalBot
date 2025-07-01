@@ -152,10 +152,8 @@ async def test_get_weather_data_unexpected_error():
 
     mock_response = MagicMock(spec=httpx.Response)
     mock_response.status_code = 200
-    # Мокируем json(), чтобы он вызывал ошибку (например, если ответ невалидный JSON)
     original_exception = Exception("JSON decode error")
     mock_response.json.side_effect = original_exception
-    # mock_response.raise_for_status = MagicMock() # Можно не мокать, если status_code 200
 
     with patch('app.api_clients.weather.settings', mock_settings), \
          patch('httpx.AsyncClient') as MockAsyncClient, \

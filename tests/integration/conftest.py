@@ -1,5 +1,3 @@
-# Файл: tests/integration/conftest.py
-
 import pytest
 from sqlmodel import create_engine, Session, SQLModel
 from sqlalchemy import event

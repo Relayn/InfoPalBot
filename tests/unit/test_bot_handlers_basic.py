@@ -2,7 +2,6 @@ import pytest
 import html
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# Импортируем тестируемые обработчики из нового расположения
 from app.bot.handlers.basic import (
     process_start_command,
     process_help_command,
@@ -11,10 +10,9 @@ from app.bot.handlers.basic import (
 from app.database.models import User as DBUser
 from aiogram.types import Message, User as AiogramUser, Chat, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
-from app.bot.fsm import SubscriptionStates  # Импорт состояний из нового места
+from app.bot.fsm import SubscriptionStates
 
 # --- Тесты для process_start_command ---
-
 
 @pytest.mark.asyncio
 async def test_process_start_command_new_user():
@@ -64,16 +62,18 @@ async def test_process_help_command():
         await process_help_command(mock_message)
 
         expected_help_text = (
-            "<b>Доступные команды:</b>\n"
-            "<code>/start</code> - Начать работу с ботом и зарегистрироваться\n"
-            "<code>/help</code> - Показать это сообщение со справкой\n"
-            "<code>/weather [город]</code> - Получить текущий прогноз погоды (например, <code>/weather Москва</code>)\n"
-            "<code>/news</code> - Получить последние новости (Россия)\n"
-            "<code>/events [город]</code> - Узнать о предстоящих событиях (например, <code>/events спб</code>). Доступные города см. в /events без аргумента.\n"
-            "<code>/subscribe</code> - Подписаться на рассылку\n"
-            "<code>/mysubscriptions</code> - Посмотреть ваши активные подписки\n"
-            "<code>/unsubscribe</code> - Отписаться от рассылки\n"
-            "<code>/cancel</code> - Отменить текущее действие (например, подписку)\n"
+            "<b>Доступные команды:</b>\n\n"
+            "/start - Перезапустить бота\n"
+            "/profile - 👤 Мой профиль и подписки\n"
+            "/weather <code>[город]</code> - ☀️ Узнать погоду\n"
+            "/news - 📰 Последние новости (США)\n"
+            "/events <code>[город]</code> - 🎉 События в городе\n\n"
+            "<b>Управление подписками:</b>\n"
+            "/subscribe - 🔔 Подписаться на рассылку\n"
+            "/mysubscriptions - 📜 Посмотреть мои подписки\n"
+            "/unsubscribe - 🔕 Отписаться от рассылки\n\n"
+            "/cancel - ❌ Отменить текущее действие\n"
+            "/help - ❓ Показать эту справку"
         )
         mock_message.answer.assert_called_once_with(expected_help_text)
         mock_logger.info.assert_called_with(
