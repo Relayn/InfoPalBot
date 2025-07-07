@@ -1,130 +1,84 @@
+"""Модуль для взаимодействия с API сервиса погоды OpenWeatherMap.
+
+Предоставляет асинхронную функцию для получения текущего прогноза погоды
+для указанного города. Модуль инкапсулирует логику HTTP-запросов,
+обработку ключей API и разбор ответов, включая обработку ошибок.
 """
-Модуль для взаимодействия с API OpenWeatherMap.
-Предоставляет функцию для получения текущего прогноза погоды.
-
-Этот модуль использует OpenWeatherMap API для получения актуальных данных о погоде.
-Для работы требуется API ключ, который должен быть установлен в настройках приложения.
-
-Основные возможности:
-- Получение текущей погоды для указанного города
-- Поддержка русского языка в ответах API
-- Обработка различных типов ошибок (HTTP, сетевые, API)
-- Логирование всех запросов и ошибок
-
-Пример использования:
-    weather_data = await get_weather_data("Москва")
-    if weather_data and not weather_data.get("error"):
-        temperature = weather_data["main"]["temp"]
-        description = weather_data["weather"][0]["description"]
-"""
+import logging
+from typing import Any, Dict, Optional
 
 import httpx
-from typing import Optional, Dict, Any  # Для аннотаций типов
-from app.config import settings  # Для доступа к API ключу OpenWeatherMap
-import logging
 
-# Настройка логгера для модуля
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
-# Базовый URL для API OpenWeatherMap (эндпоинт для текущей погоды)
 BASE_OPENWEATHERMAP_URL: str = "https://api.openweathermap.org/data/2.5/weather"
 
 
 async def get_weather_data(city_name: str) -> Optional[Dict[str, Any]]:
-    """
-    Получает данные о текущей погоде для указанного города из API OpenWeatherMap.
+    """Получает данные о погоде для города через OpenWeatherMap API.
 
-    Функция выполняет асинхронный HTTP запрос к OpenWeatherMap API и возвращает
-    структурированные данные о погоде. В случае ошибок возвращает словарь с
-    информацией об ошибке.
+    Выполняет асинхронный GET-запрос к API, запрашивая данные в метрической
+    системе и на русском языке. Обрабатывает возможные ошибки, такие как
+    неверный ключ API, сетевые проблемы или ошибки со стороны сервера API.
 
     Args:
-        city_name (str): Название города, для которого запрашивается погода.
-                        Может быть на русском или английском языке.
+        city_name: Название города, для которого запрашивается погода.
 
     Returns:
-        Optional[Dict[str, Any]]: Словарь с данными о погоде в случае успеха.
-                                 Структура ответа:
-                                 {
-                                     "main": {
-                                         "temp": float,  # Температура в Цельсиях
-                                         "humidity": int # Влажность в процентах
-                                     },
-                                     "weather": [{
-                                         "description": str,  # Описание погоды на русском
-                                         "icon": str         # Код иконки
-                                     }],
-                                     "wind": {
-                                         "speed": float  # Скорость ветра в м/с
-                                     }
-                                 }
+        Словарь с данными о погоде в случае успеха. Пример:
+        {
+            "main": {"temp": 20.5, "feels_like": 19.8, "humidity": 60},
+            "weather": [{"description": "ясно"}],
+            "wind": {"speed": 3.5},
+            "name": "Москва"
+        }
 
-                                 В случае ошибки:
-                                 {
-                                     "error": True,
-                                     "status_code": int,  # HTTP код ошибки (если есть)
-                                     "message": str       # Описание ошибки
-                                 }
+        Словарь с информацией об ошибке, если запрос не удался. Пример:
+        {"error": True, "message": "city not found", "status_code": 404}
 
-                                 None, если API ключ не установлен.
-
-    Raises:
-        Не выбрасывает исключений, все ошибки обрабатываются внутри функции
-        и возвращаются в виде словаря с ключом "error": True.
-
-    Note:
-        - Требуется установленный WEATHER_API_KEY в настройках приложения
-        - Все температуры возвращаются в градусах Цельсия
-        - Описания погоды возвращаются на русском языке
+        None, если ключ WEATHER_API_KEY не установлен в настройках.
     """
-    # Проверяем наличие API ключа перед выполнением запроса
     if not settings.WEATHER_API_KEY:
         logger.error(
-            "WEATHER_API_KEY не установлен в настройках. Невозможно получить данные о погоде."
+            "WEATHER_API_KEY не установлен. Запрос погоды невозможен."
         )
         return None
 
-    # Параметры запроса к API OpenWeatherMap
     params: Dict[str, Any] = {
-        "q": city_name,  # Название города
-        "appid": settings.WEATHER_API_KEY,  # Ваш API ключ
-        "units": "metric",  # Единицы измерения (metric для Цельсия)
-        "lang": "ru",  # Язык ответа (русский)
+        "q": city_name,
+        "appid": settings.WEATHER_API_KEY,
+        "units": "metric",  # Градусы Цельсия
+        "lang": "ru",
     }
 
     try:
-        # Используем асинхронный HTTP клиент httpx для выполнения запроса
         async with httpx.AsyncClient() as client:
             response = await client.get(BASE_OPENWEATHERMAP_URL, params=params)
-            # Вызовет исключение httpx.HTTPStatusError для HTTP ошибок (4xx или 5xx)
             response.raise_for_status()
-            weather_data = response.json()  # Парсим JSON ответ от API
-            logger.info(f"Успешно получены данные о погоде для города '{city_name}'.")
+            weather_data = response.json()
+            logger.info(f"Успешно получены данные о погоде для '{city_name}'.")
             return weather_data
     except httpx.HTTPStatusError as e:
-        # Обработка ошибок HTTP статуса (например, 404 Not Found, 401 Unauthorized)
         logger.error(
-            f"Ошибка HTTP при запросе погоды для города '{city_name}': {e.response.status_code} - {e.response.text}",
+            f"Ошибка HTTP при запросе погоды для '{city_name}': "
+            f"{e.response.status_code} - {e.response.text}",
             exc_info=True,
         )
-        # Попытка извлечь более детальное сообщение об ошибке из JSON ответа API
         try:
             error_details = e.response.json()
-            return {
-                "error": True,
-                "status_code": e.response.status_code,
-                "message": error_details.get("message", e.response.text),
-            }
-        except Exception:  # Если ответ не является валидным JSON
-            return {
-                "error": True,
-                "status_code": e.response.status_code,
-                "message": e.response.text,
-            }
+            message = error_details.get("message", e.response.text)
+        except Exception:
+            message = e.response.text
+        return {
+            "error": True,
+            "status_code": e.response.status_code,
+            "message": message,
+        }
     except httpx.RequestError as e:
-        # Обработка сетевых ошибок (например, проблемы с подключением, DNS-ошибки)
         logger.error(
-            f"Ошибка сети при запросе погоды для города '{city_name}': {e}",
+            f"Сетевая ошибка при запросе погоды для '{city_name}': {e}",
             exc_info=True,
         )
         return {
@@ -132,9 +86,8 @@ async def get_weather_data(city_name: str) -> Optional[Dict[str, Any]]:
             "message": "Сетевая ошибка при запросе к сервису погоды.",
         }
     except Exception as e:
-        # Обработка любых других непредвиденных исключений (например, ошибок парсинга JSON)
         logger.error(
-            f"Непредвиденная ошибка при запросе погоды для города '{city_name}': {e}",
+            f"Непредвиденная ошибка при запросе погоды для '{city_name}': {e}",
             exc_info=True,
         )
         return {

@@ -1,42 +1,44 @@
-"""
-Модуль для выполнения операций CRUD (Create, Read, Update, Delete)
-с моделями базы данных (User, Subscription, Log).
+"""Модуль для выполнения операций CRUD (Create, Read, Update, Delete).
+
+Этот файл содержит набор функций для взаимодействия с базой данных. Каждая
+функция инкапсулирует определенную операцию с моделями данных (User,
+Subscription, Log), обеспечивая четкое разделение логики работы с БД
+от остальной части приложения.
 """
 import logging
-from sqlmodel import Session, select
-from typing import Optional, List
 from datetime import datetime, timezone
+from typing import List, Optional
 
-from app.database.models import User, Subscription, Log
+from sqlmodel import Session, select
+
+from app.database.models import Log, Subscription, User
 
 logger = logging.getLogger(__name__)
 
 
 def get_user_by_telegram_id(session: Session, telegram_id: int) -> Optional[User]:
-    """
-    Находит пользователя в базе данных по его Telegram ID.
+    """Находит пользователя в базе данных по его Telegram ID.
 
     Args:
-        session (Session): Сессия базы данных.
-        telegram_id (int): Уникальный идентификатор пользователя в Telegram.
+        session: Сессия базы данных SQLAlchemy.
+        telegram_id: Уникальный идентификатор пользователя в Telegram.
 
     Returns:
-        Optional[User]: Объект пользователя, если найден, иначе None.
+        Объект пользователя, если он найден, иначе None.
     """
     statement = select(User).where(User.telegram_id == telegram_id)
     return session.exec(statement).first()
 
 
 def create_user(session: Session, telegram_id: int) -> User:
-    """
-    Создает нового пользователя в базе данных.
+    """Создает нового пользователя в базе данных.
 
     Args:
-        session (Session): Сессия базы данных.
-        telegram_id (int): Уникальный идентификатор пользователя в Telegram.
+        session: Сессия базы данных SQLAlchemy.
+        telegram_id: Уникальный идентификатор пользователя в Telegram.
 
     Returns:
-        User: Созданный объект пользователя.
+        Созданный объект пользователя.
     """
     db_user = User(telegram_id=telegram_id)
     session.add(db_user)
@@ -47,15 +49,17 @@ def create_user(session: Session, telegram_id: int) -> User:
 
 
 def create_user_if_not_exists(session: Session, telegram_id: int) -> User:
-    """
-    Возвращает существующего пользователя или создает нового, если он не найден.
+    """Возвращает существующего пользователя или создает нового.
+
+    Эта функция является удобной оберткой, которая предотвращает дублирование
+    пользователей в базе данных при первом взаимодействии.
 
     Args:
-        session (Session): Сессия базы данных.
-        telegram_id (int): Уникальный идентификатор пользователя в Telegram.
+        session: Сессия базы данных SQLAlchemy.
+        telegram_id: Уникальный идентификатор пользователя в Telegram.
 
     Returns:
-        User: Существующий или только что созданный объект пользователя.
+        Существующий или только что созданный объект пользователя.
     """
     user = get_user_by_telegram_id(session=session, telegram_id=telegram_id)
     if user is None:
@@ -72,26 +76,26 @@ def create_subscription(
     frequency: Optional[int] = None,
     cron_expression: Optional[str] = None,
 ) -> Subscription:
-    """
-    Создает новую подписку для пользователя.
+    """Создает новую подписку для пользователя.
 
-    Принимает либо frequency (для интервалов), либо cron_expression (для cron-задач).
-    Выбрасывает ValueError, если не указан ни один из них или указаны оба.
+    Принимает либо `frequency` (для интервалов), либо `cron_expression`
+    (для расписаний).
 
     Args:
-        session (Session): Сессия базы данных.
-        user_id (int): ID пользователя, которому принадлежит подписка.
-        info_type (str): Тип информации ('weather', 'news', 'events').
-        details (Optional[str]): Дополнительная информация (например, город).
-        category (Optional[str]): Категория для новостей или событий.
-        frequency (Optional[int]): Частота отправки в часах.
-        cron_expression (Optional[str]): Выражение CRON для расписания.
+        session: Сессия базы данных SQLAlchemy.
+        user_id: ID пользователя, которому принадлежит подписка.
+        info_type: Тип информации ('weather', 'news', 'events').
+        details: Дополнительная информация (например, город).
+        category: Категория для новостей или событий.
+        frequency: Частота отправки в часах.
+        cron_expression: Выражение CRON для расписания.
 
     Returns:
-        Subscription: Созданный объект подписки.
+        Созданный объект подписки.
 
     Raises:
-        ValueError: Если параметры `frequency` и `cron_expression` заданы некорректно.
+        ValueError: Если `frequency` и `cron_expression` заданы
+            некорректно (оба или ни одного).
     """
     if frequency is None and cron_expression is None:
         raise ValueError("Должен быть указан либо frequency, либо cron_expression.")
@@ -115,15 +119,14 @@ def create_subscription(
 
 
 def get_subscriptions_by_user_id(session: Session, user_id: int) -> List[Subscription]:
-    """
-    Получает список всех активных подписок для указанного пользователя.
+    """Получает список всех активных подписок для указанного пользователя.
 
     Args:
-        session (Session): Сессия базы данных.
-        user_id (int): ID пользователя.
+        session: Сессия базы данных SQLAlchemy.
+        user_id: ID пользователя.
 
     Returns:
-        List[Subscription]: Список активных подписок.
+        Список активных подписок.
     """
     statement = select(Subscription).where(
         Subscription.user_id == user_id, Subscription.status == "active"
@@ -138,18 +141,17 @@ def get_subscription_by_user_and_type(
     details: Optional[str] = None,
     category: Optional[str] = None,
 ) -> Optional[Subscription]:
-    """
-    Находит активную подписку по набору критериев для проверки на дубликаты.
+    """Находит активную подписку по набору критериев для проверки дубликатов.
 
     Args:
-        session (Session): Сессия базы данных.
-        user_id (int): ID пользователя.
-        info_type (str): Тип информации.
-        details (Optional[str]): Детали (город).
-        category (Optional[str]): Категория.
+        session: Сессия базы данных SQLAlchemy.
+        user_id: ID пользователя.
+        info_type: Тип информации.
+        details: Детали (например, город).
+        category: Категория.
 
     Returns:
-        Optional[Subscription]: Найденная подписка или None.
+        Найденная подписка или None.
     """
     statement = select(Subscription).where(
         Subscription.user_id == user_id,
@@ -170,15 +172,17 @@ def get_subscription_by_user_and_type(
 
 
 def delete_subscription(session: Session, subscription_id: int) -> bool:
-    """
-    Деактивирует подписку, устанавливая ее статус в 'inactive'.
+    """Деактивирует подписку, устанавливая ее статус в 'inactive'.
+
+    Это "мягкое удаление". Запись остается в базе данных для истории,
+    но больше не участвует в рассылках.
 
     Args:
-        session (Session): Сессия базы данных.
-        subscription_id (int): ID подписки, которую нужно деактивировать.
+        session: Сессия базы данных SQLAlchemy.
+        subscription_id: ID подписки, которую нужно деактивировать.
 
     Returns:
-        bool: True, если подписка найдена и деактивирована, иначе False.
+        True, если подписка найдена и деактивирована, иначе False.
     """
     subscription = session.get(Subscription, subscription_id)
     if not subscription:
@@ -198,17 +202,16 @@ def create_log_entry(
     command: str,
     details: Optional[str] = None,
 ) -> Log:
-    """
-    Создает запись в логе действий пользователя.
+    """Создает запись в логе действий пользователя.
 
     Args:
-        session (Session): Сессия базы данных.
-        user_id (Optional[int]): ID пользователя, если он известен.
-        command (str): Выполненная команда или действие.
-        details (Optional[str]): Дополнительные детали действия.
+        session: Сессия базы данных SQLAlchemy.
+        user_id: ID пользователя, если он известен.
+        command: Выполненная команда или действие.
+        details: Дополнительные детали действия.
 
     Returns:
-        Log: Созданный объект лога.
+        Созданный объект лога.
     """
     db_log = Log(user_id=user_id, command=command, details=details)
     session.add(db_log)
@@ -220,17 +223,17 @@ def create_log_entry(
 def log_user_action(
     db_session: Session, telegram_id: int, command: str, details: Optional[str] = None
 ):
-    """
-    Удобная обертка для логирования действия пользователя по его Telegram ID.
+    """Удобная обертка для логирования действия пользователя по Telegram ID.
 
-    Находит ID пользователя в БД и создает запись в логе.
-    Безопасно обрабатывает случаи, когда пользователь не найден.
+    Находит ID пользователя в БД и создает запись в логе. Безопасно
+    обрабатывает случаи, когда пользователь не найден или происходит
+    ошибка записи в лог.
 
     Args:
-        db_session (Session): Сессия базы данных.
-        telegram_id (int): Telegram ID пользователя.
-        command (str): Выполненная команда или действие.
-        details (Optional[str]): Дополнительные детали.
+        db_session: Сессия базы данных SQLAlchemy.
+        telegram_id: Telegram ID пользователя.
+        command: Выполненная команда или действие.
+        details: Дополнительные детали.
     """
     user = get_user_by_telegram_id(session=db_session, telegram_id=telegram_id)
     user_db_id: Optional[int] = user.id if user else None
@@ -240,6 +243,7 @@ def log_user_action(
         )
     except Exception as e:
         logger.error(
-            f"Не удалось создать запись в логе для пользователя {telegram_id}, команда {command}: {e}",
+            f"Не удалось создать запись в логе для пользователя {telegram_id}, "
+            f"команда {command}: {e}",
             exc_info=True,
         )

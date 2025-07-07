@@ -1,14 +1,26 @@
+"""Модуль управления планировщиком задач APScheduler.
+
+Этот модуль отвечает за инициализацию, конфигурацию, запуск и остановку
+планировщика задач. Он также содержит логику для загрузки и планирования
+задач на основе активных подписок из базы данных при старте приложения.
+
+Ключевые компоненты:
+- `scheduler`: Глобальный экземпляр AsyncIOScheduler.
+- `set_bot_instance()`: Устанавливает экземпляр бота для использования в задачах.
+- `schedule_jobs()`: Загружает активные подписки из БД и планирует их.
+- `shutdown_scheduler()`: Корректно останавливает планировщик.
+"""
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from aiogram import Bot
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.executors.asyncio import AsyncIOExecutor
-from datetime import datetime, timezone
+from apscheduler.jobstores.memory import MemoryJobStore
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from app.database.session import get_session
 from app.database.models import Subscription
+from app.database.session import get_session
 from .tasks import send_single_notification
 
 logger = logging.getLogger(__name__)
@@ -26,6 +38,15 @@ scheduler = AsyncIOScheduler(
 
 
 def set_bot_instance(bot: Bot):
+    """Сохраняет глобальный экземпляр бота и конфигурирует планировщик.
+
+    Эта функция необходима, чтобы передать активный экземпляр `aiogram.Bot`
+    в задачи, выполняемые планировщиком, так как они не имеют прямого
+    доступа к нему.
+
+    Args:
+        bot: Экземпляр `aiogram.Bot` для использования в задачах.
+    """
     global _bot_instance
     if _bot_instance is None:
         _bot_instance = bot
@@ -34,9 +55,11 @@ def set_bot_instance(bot: Bot):
 
 
 def schedule_jobs():
-    """
-    Динамически планирует задачи для каждой активной подписки из базы данных.
-    Поддерживает интервальные и cron-задачи.
+    """Загружает активные подписки из БД и планирует для них задачи.
+
+    Функция итерирует по всем активным подпискам и создает для каждой
+    соответствующую задачу в APScheduler, используя либо интервальный,
+    либо cron-триггер.
     """
     if _bot_instance is None:
         logger.error("Экземпляр бота не установлен. Планирование задач невозможно.")
@@ -45,26 +68,38 @@ def schedule_jobs():
     logger.info("Начало динамического планирования задач из БД...")
     try:
         with get_session() as session:
-            active_subscriptions = session.query(Subscription).filter(Subscription.status == "active").all()
+            active_subscriptions = (
+                session.query(Subscription)
+                .filter(Subscription.status == "active")
+                .all()
+            )
 
             if not active_subscriptions:
-                logger.info("Активных подписок в БД не найдено. Новые задачи не запланированы.")
+                logger.info(
+                    "Активных подписок в БД не найдено. Новые задачи не запланированы."
+                )
                 return
 
             for sub in active_subscriptions:
                 job_id = f"sub_{sub.id}"
                 job_params = {}
 
-                # --- Логика выбора типа триггера ---
                 if sub.frequency:
                     job_params = {"trigger": "interval", "hours": sub.frequency}
                     log_msg = f"интервалом {sub.frequency} ч."
                 elif sub.cron_expression:
                     parts = sub.cron_expression.split()
-                    job_params = {"trigger": "cron", "minute": int(parts[0]), "hour": int(parts[1])}
+                    job_params = {
+                        "trigger": "cron",
+                        "minute": int(parts[0]),
+                        "hour": int(parts[1]),
+                    }
                     log_msg = f"расписанием cron: '{sub.cron_expression}'"
                 else:
-                    logger.warning(f"Подписка ID {sub.id} не имеет ни frequency, ни cron_expression. Пропуск.")
+                    logger.warning(
+                        f"Подписка ID {sub.id} не имеет ни frequency, "
+                        f"ни cron_expression. Пропуск."
+                    )
                     continue
 
                 try:
@@ -81,17 +116,29 @@ def schedule_jobs():
                         **job_params,
                     )
                     logger.info(
-                        f"Задача {job_id} для подписки (type: {sub.info_type}, user: {sub.user_id}) запланирована с {log_msg}")
+                        f"Задача {job_id} для подписки (type: {sub.info_type}, "
+                        f"user: {sub.user_id}) запланирована с {log_msg}"
+                    )
                 except Exception as e:
-                    logger.error(f"Ошибка при добавлении задачи {job_id} в планировщик: {e}", exc_info=True)
+                    logger.error(
+                        f"Ошибка при добавлении задачи {job_id} в планировщик: {e}",
+                        exc_info=True,
+                    )
 
-            logger.info(f"Планирование завершено. Всего запланировано/обновлено {len(active_subscriptions)} задач.")
+            logger.info(
+                "Планирование завершено. Всего запланировано/обновлено "
+                f"{len(active_subscriptions)} задач."
+            )
 
     except Exception as e:
-        logger.error(f"Критическая ошибка при получении подписок из БД для планирования: {e}", exc_info=True)
+        logger.error(
+            f"Критическая ошибка при получении подписок из БД для планирования: {e}",
+            exc_info=True,
+        )
 
 
 def shutdown_scheduler():
+    """Корректно останавливает планировщик, если он запущен."""
     if scheduler.running:
         try:
             scheduler.shutdown()

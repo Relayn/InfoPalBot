@@ -3,7 +3,7 @@ import httpx
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from app.api_clients.weather import get_weather_data, BASE_OPENWEATHERMAP_URL
-from app.config import Settings # Нам понадобится мокать settings
+from app.config import Settings
 
 # --- Тесты для get_weather_data ---
 
@@ -30,7 +30,6 @@ async def test_get_weather_data_success():
     mock_response = MagicMock(spec=httpx.Response)
     mock_response.status_code = 200
     mock_response.json.return_value = expected_weather_data
-    # mock_response.raise_for_status = MagicMock() # Можно так, или убедиться, что не вызывается при 200
 
     # Патчим httpx.AsyncClient и settings
     with patch('app.api_clients.weather.settings', mock_settings), \
@@ -65,8 +64,7 @@ async def test_get_weather_data_no_api_key():
         result = await get_weather_data(city_name)
 
         assert result is None
-        # Ожидаем точный текст лога из app/api_clients/weather.py
-        mock_logger_error.assert_called_once_with("WEATHER_API_KEY не установлен в настройках. Невозможно получить данные о погоде.")
+        mock_logger_error.assert_called_once_with("WEATHER_API_KEY не установлен. Запрос погоды невозможен.")
 
 
 @pytest.mark.asyncio
@@ -103,9 +101,8 @@ async def test_get_weather_data_http_status_error_404():
         expected_error_result = {"error": True, "status_code": 404, "message": "city not found"}
         assert result == expected_error_result
         mock_logger_error.assert_called_once()
-        # Проверяем, что информация об ошибке залогирована
         args, _ = mock_logger_error.call_args
-        assert f"Ошибка HTTP при запросе погоды для города '{city_name}'" in args[0]
+        assert f"Ошибка HTTP при запросе погоды для '{city_name}':" in args[0]
         assert "404" in args[0]
         assert "city not found" in args[0]
 
@@ -135,8 +132,7 @@ async def test_get_weather_data_request_error():
 
             expected_error_result = {"error": True, "message": "Сетевая ошибка при запросе к сервису погоды."}
             assert result == expected_error_result
-            # Проверяем, что logger.error был вызван с exc_info=True
-            mock_logger_error.assert_called_once_with(f"Ошибка сети при запросе погоды для города '{city_name}': {network_error}", exc_info=True)
+            mock_logger_error.assert_called_once_with(f"Сетевая ошибка при запросе погоды для '{city_name}': {network_error}", exc_info=True)
 
 
 @pytest.mark.asyncio
@@ -169,7 +165,5 @@ async def test_get_weather_data_unexpected_error():
         assert result == expected_error_result
         mock_logger_error.assert_called_once()
         args, kwargs = mock_logger_error.call_args
-        # Проверяем, что текст оригинальной ошибки (JSON decode error) попал в сообщение лога
-        assert f"Непредвиденная ошибка при запросе погоды для города '{city_name}': {original_exception}" == args[0]
-        # Проверяем, что exc_info=True было передано для подробного трейсбека
+        assert f"Непредвиденная ошибка при запросе погоды для '{city_name}': {original_exception}" == args[0]
         assert kwargs.get('exc_info') is True

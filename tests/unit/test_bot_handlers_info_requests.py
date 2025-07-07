@@ -1,6 +1,7 @@
 import pytest
 import html
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
+from tests.utils.mock_helpers import get_mock_fsm_context
 
 from app.bot.handlers.info_requests import (
     process_weather_command,
@@ -31,8 +32,9 @@ async def test_process_weather_command_success():
     ), patch("app.bot.handlers.info_requests.get_session"), patch(
         "app.bot.handlers.info_requests.log_user_action"
     ) as mock_log_action:
-        await process_weather_command(mock_message, mock_command)
-        mock_message.reply.assert_any_call(
+        mock_state = await get_mock_fsm_context()
+        await process_weather_command(mock_message, mock_command, mock_state)
+        mock_message.answer.assert_any_call(
             f"Запрашиваю погоду для города <b>{html.escape(city_name)}</b>..."
         )
         expected_response_text = (
@@ -42,7 +44,7 @@ async def test_process_weather_command_success():
             f"💨 Ветер: {mock_weather_api_response['wind']['speed']} м/с, Южный\n"
             f"☀️ Описание: Ясно"
         )
-        mock_message.answer.assert_called_once_with(expected_response_text)
+        mock_message.answer.assert_any_call(expected_response_text)
         mock_log_action.assert_called_once_with(
             ANY, mock_message.from_user.id, "/weather", f"город: {city_name}, успех"
         )
@@ -57,12 +59,13 @@ async def test_process_weather_command_no_city():
     with patch("app.bot.handlers.info_requests.get_session"), patch(
         "app.bot.handlers.info_requests.log_user_action"
     ) as mock_log_action:
-        await process_weather_command(mock_message, mock_command)
+        mock_state = await get_mock_fsm_context()
+        await process_weather_command(mock_message, mock_command, mock_state)
         mock_message.reply.assert_called_once_with(
-            "Пожалуйста, укажите название города..."
+            "Пожалуйста, укажите название города."
         )
         mock_log_action.assert_called_once_with(
-            ANY, mock_message.from_user.id, "/weather", "Город не указан"
+            ANY, mock_message.from_user.id, "/weather", "Город не указан, ожидание ввода"
         )
 
 
@@ -116,7 +119,7 @@ async def test_process_events_command_success():
     ) as mock_log_action:
         await process_events_command(mock_message, mock_command)
         mock_message.reply.assert_any_call(
-            f"Запрашиваю актуальные события для города <b>{html.escape(city_arg)}</b>..."
+            f"Запрашиваю события для города <b>{html.escape(city_arg)}</b>..."
         )
         mock_log_action.assert_called_once_with(
             ANY, mock_message.from_user.id, "/events", f"город: {city_arg}, успех"

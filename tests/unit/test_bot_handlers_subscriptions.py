@@ -145,7 +145,9 @@ async def test_subscribe_start_limit_reached(db_user_sub, session_sub):
             "app.bot.handlers.subscription.log_user_action"):
         await process_subscribe_command_start(mock_message, mock_state)
         expected_text = (
-            "У вас уже 3 активных подписки. Это максимальное количество.\n" "Вы можете удалить одну из существующих подписок с помощью /unsubscribe.")
+            "У вас уже 3 активных подписки. Это максимальное количество.\n"
+            "Вы можете управлять ими через команду /profile."
+        )
         mock_message.answer.assert_called_once_with(expected_text)
 
 
@@ -346,7 +348,9 @@ async def test_process_city_search_ignores_non_text_message():
 
     await process_city_search(mock_message, mock_state)
 
-    mock_message.answer.assert_not_called()
+    mock_message.answer.assert_called_once_with(
+        "Пожалуйста, введите минимум 3 буквы для поиска."
+    )
 
 
 @pytest.mark.asyncio

@@ -1,3 +1,16 @@
+"""
+Главный модуль запуска Telegram-бота InfoPalBot.
+
+Этот файл отвечает за:
+- Настройку и конфигурацию логирования.
+- Инициализацию объектов Bot и Dispatcher из библиотеки aiogram.
+- Регистрацию обработчиков (хендлеров) из соответствующих модулей.
+- Определение и регистрацию функций, выполняемых при старте (on_startup)
+  и завершении работы (on_shutdown) бота.
+- Управление жизненным циклом планировщика задач APScheduler.
+- Установку команд меню бота.
+- Запуск процесса поллинга для получения обновлений от Telegram.
+"""
 import logging
 import asyncio
 
@@ -6,7 +19,6 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from app.config import settings
-from app.database.session import create_db_and_tables
 from app.scheduler.main import set_bot_instance, schedule_jobs, scheduler as aps_scheduler, shutdown_scheduler
 
 from app.bot.handlers import basic, info_requests, subscription, profile
@@ -29,7 +41,6 @@ async def on_startup():
     Выполняется при запуске бота.
     """
     logger.info("Бот запускается...")
-    # create_db_and_tables() # <-- Эта функция больше не нужна, Alembic управляет БД
 
     # Настройка команд меню бота
     commands_to_set = [
@@ -60,7 +71,7 @@ async def on_startup():
     logger.info("Бот успешно запущен!")
 
 
-async def on_shutdown():
+def on_shutdown():
     """
     Выполняется при остановке бота.
     """

@@ -54,7 +54,7 @@ async def test_process_events_command_no_events_found(mock_get_events):
         await process_events_command(mock_message, mock_command)
 
         mock_message.reply.assert_any_call(
-            f"Не найдено актуальных событий для города <b>{html.escape(city_arg)}</b>."
+            f"Не найдено событий для города <b>{html.escape(city_arg)}</b>."
         )
 
 

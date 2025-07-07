@@ -41,6 +41,18 @@ NEWS_CATEGORIES: Dict[str, str] = {
     "technology": "💻 Технологии",
 }
 
+# --- Сообщения об ошибках ---
+ERROR_MSG_UNKNOWN_API_ERROR = "Неизвестная ошибка API."
+
+# --- Названия команд ---
+CMD_EVENTS = "events"
+CMD_NEWS = "news"
+CMD_WEATHER = "weather"
+
+# --- Тексты и данные для клавиатур ---
+BTN_TEXT_CANCEL = "❌ Отмена"
+CALLBACK_DATA_CANCEL_FSM = "subscribe_fsm_cancel"
+
 # Категории для событий (KudaGo)
 # Ключ - slug для API, значение - текст для кнопки
 EVENTS_CATEGORIES: Dict[str, str] = {

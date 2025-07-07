@@ -2,6 +2,7 @@ import pytest
 import httpx
 import html
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
+from tests.utils.mock_helpers import get_mock_fsm_context
 
 from sqlmodel import Session, select
 from app.bot.handlers.info_requests import process_weather_command
@@ -53,9 +54,10 @@ async def test_weather_command_successful_flow(integration_session: Session):
         MockAsyncWeatherClient.return_value.__aenter__.return_value = (
             mock_weather_client_instance
         )
-        await process_weather_command(mock_message, mock_command_obj)
+        mock_state = await get_mock_fsm_context()
+        await process_weather_command(mock_message, mock_command_obj, mock_state)
 
-    mock_message.reply.assert_any_call(
+    mock_message.answer.assert_any_call(
         f"Запрашиваю погоду для города <b>{html.escape(city_name)}</b>..."
     )
     log_entry = integration_session.exec(

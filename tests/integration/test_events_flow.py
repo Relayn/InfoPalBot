@@ -51,7 +51,7 @@ async def test_events_command_api_error_flow(integration_session: Session):
         await process_events_command(mock_message, mock_command_obj)
 
     mock_message.reply.assert_any_call(
-        f"Запрашиваю актуальные события для города <b>{html.escape(city_argument)}</b>..."
+        f"Запрашиваю события для города <b>{html.escape(city_argument)}</b>..."
     )
     mock_message.reply.assert_any_call(
         f"Не удалось получить события: {html.escape(error_detail_from_api)}"

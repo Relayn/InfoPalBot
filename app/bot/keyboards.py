@@ -1,18 +1,35 @@
+"""Модуль для создания и управления inline-клавиатурами.
+
+Этот файл содержит функции-конструкторы, каждая из которых отвечает за
+создание определенной inline-клавиатуры для различных этапов взаимодействия
+с пользователем, таких как подписка, управление профилем и выбор опций.
+"""
 import html
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from .constants import (
-    INFO_TYPE_NEWS,
-    INFO_TYPE_EVENTS,
-    NEWS_CATEGORIES,
+from typing import List
+
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+from app.bot.constants import (
+    BTN_TEXT_CANCEL,
+    CALLBACK_DATA_CANCEL_FSM,
     EVENTS_CATEGORIES,
+    INFO_TYPE_EVENTS,
+    INFO_TYPE_NEWS,
     INFO_TYPE_WEATHER,
     KUDAGO_LOCATION_SLUGS,
+    NEWS_CATEGORIES,
 )
+from app.database.models import Subscription
 
 
 def get_frequency_keyboard() -> InlineKeyboardMarkup:
-    """
-    Создает и возвращает inline-клавиатуру для выбора частоты уведомлений.
+    """Создает и возвращает inline-клавиатуру для выбора частоты уведомлений.
+
+    Клавиатура предлагает интервальные варианты (каждые N часов) и один
+    cron-вариант (ежедневно в 9:00 UTC), а также кнопку отмены.
+
+    Returns:
+        Готовая клавиатура для выбора частоты.
     """
     buttons = [
         [
@@ -28,20 +45,23 @@ def get_frequency_keyboard() -> InlineKeyboardMarkup:
                 text="Ежедневно в 9:00 (UTC)", callback_data="cron:09:00"
             )
         ],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="subscribe_fsm_cancel")],
+        [
+            InlineKeyboardButton(
+                text=BTN_TEXT_CANCEL, callback_data=CALLBACK_DATA_CANCEL_FSM
+            )
+        ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def get_city_selection_keyboard(cities: list[str]) -> InlineKeyboardMarkup:
-    """
-    Создает и возвращает inline-клавиатуру для выбора города из списка.
+def get_city_selection_keyboard(cities: List[str]) -> InlineKeyboardMarkup:
+    """Создает и возвращает inline-клавиатуру для выбора города из списка.
 
     Args:
-        cities (list[str]): Список найденных городов.
+        cities: Список найденных городов для отображения на кнопках.
 
     Returns:
-        InlineKeyboardMarkup: Готовая клавиатура с городами.
+        Готовая клавиатура с кнопками городов и кнопкой отмены.
     """
     buttons = []
     row = []
@@ -56,14 +76,20 @@ def get_city_selection_keyboard(cities: list[str]) -> InlineKeyboardMarkup:
         buttons.append(row)
 
     buttons.append(
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="subscribe_fsm_cancel")]
+        [
+            InlineKeyboardButton(
+                text=BTN_TEXT_CANCEL, callback_data=CALLBACK_DATA_CANCEL_FSM
+            )
+        ]
     )
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def get_profile_keyboard() -> InlineKeyboardMarkup:
-    """
-    Создает и возвращает inline-клавиатуру для главного меню профиля.
+    """Создает и возвращает inline-клавиатуру для главного меню профиля.
+
+    Returns:
+        Готовая клавиатура с опциями "Управление подписками" и "Назад к боту".
     """
     buttons = [
         [
@@ -77,8 +103,12 @@ def get_profile_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_back_to_profile_keyboard() -> InlineKeyboardMarkup:
-    """
-    Создает и возвращает клавиатуру с одной кнопкой "Назад в профиль".
+    """Создает и возвращает клавиатуру с одной кнопкой "Назад в профиль".
+
+    Используется в подменю профиля для возврата на главный экран.
+
+    Returns:
+        Готовая клавиатура с одной кнопкой.
     """
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -92,16 +122,15 @@ def get_back_to_profile_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_profile_subscriptions_keyboard(
-    subscriptions: list,
+    subscriptions: List[Subscription],
 ) -> InlineKeyboardMarkup:
-    """
-    Создает клавиатуру со списком подписок для управления.
+    """Создает клавиатуру со списком подписок для управления (удаления).
 
     Args:
-        subscriptions (list): Список объектов подписок.
+        subscriptions: Список объектов подписок пользователя.
 
     Returns:
-        InlineKeyboardMarkup: Готовая клавиатура.
+        Готовая клавиатура со списком подписок и кнопкой "Назад".
     """
     buttons = []
     for sub in subscriptions:
@@ -150,15 +179,16 @@ def get_profile_subscriptions_keyboard(
 
 
 def get_categories_keyboard(info_type: str) -> InlineKeyboardMarkup:
-    """
-    Создает и возвращает inline-клавиатуру для выбора категории новостей или событий.
+    """Создает и возвращает inline-клавиатуру для выбора категории.
+
+    Генерирует клавиатуру на основе типа информации (новости или события).
 
     Args:
-        info_type (str): Тип информации ('news' или 'events'), для которого
-                         нужно сгенерировать клавиатуру.
+        info_type: Тип информации ('news' или 'events'), для которого
+            нужно сгенерировать клавиатуру.
 
     Returns:
-        InlineKeyboardMarkup: Готовая клавиатура с категориями.
+        Готовая клавиатура с категориями и кнопкой отмены.
     """
     buttons = []
     categories_map = {}
@@ -191,7 +221,11 @@ def get_categories_keyboard(info_type: str) -> InlineKeyboardMarkup:
         ]
     )
     buttons.append(
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="subscribe_fsm_cancel")]
+        [
+            InlineKeyboardButton(
+                text=BTN_TEXT_CANCEL, callback_data=CALLBACK_DATA_CANCEL_FSM
+            )
+        ]
     )
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)

@@ -1,3 +1,9 @@
+"""Обработчики базовых команд бота.
+
+Этот модуль содержит хендлеры для основных команд, таких как
+/start, /help и /cancel. Эти команды составляют основу взаимодействия
+пользователя с ботом.
+"""
 import logging
 from typing import Optional
 
@@ -15,15 +21,15 @@ router = Router()
 
 @router.message(Command("cancel"), StateFilter("*"))
 async def cmd_cancel_any_state(message: types.Message, state: FSMContext):
-    """
-    Обрабатывает команду /cancel в любом состоянии FSM (или без него).
+    """Обрабатывает команду /cancel в любом состоянии FSM.
 
     Сбрасывает текущее состояние FSM, если оно установлено, и уведомляет
-    пользователя об отмене действия.
+    пользователя об отмене действия. Если пользователь не находится ни в каком
+    состоянии, сообщает, что отменять нечего.
 
     Args:
-        message (types.Message): Объект сообщения от пользователя.
-        state (FSMContext): Контекст состояния FSM.
+        message: Объект сообщения от пользователя.
+        state: Контекст состояния FSM.
     """
     telegram_id: int = message.from_user.id
     current_state_str: Optional[str] = await state.get_state()
@@ -39,7 +45,8 @@ async def cmd_cancel_any_state(message: types.Message, state: FSMContext):
         return
 
     logger.info(
-        f"Пользователь {telegram_id} отменил действие командой /cancel из состояния {current_state_str}."
+        f"Пользователь {telegram_id} отменил действие командой /cancel "
+        f"из состояния {current_state_str}."
     )
     await state.clear()
     await message.answer("Действие отменено.", reply_markup=ReplyKeyboardRemove())
@@ -47,38 +54,39 @@ async def cmd_cancel_any_state(message: types.Message, state: FSMContext):
 
 @router.message(Command("start"), StateFilter("*"))
 async def process_start_command(message: types.Message, state: FSMContext):
-    """
-    Обрабатывает команду /start.
+    """Обрабатывает команду /start.
 
     Регистрирует пользователя, если он новый, сбрасывает любое активное
     состояние FSM и отправляет приветственное сообщение.
 
     Args:
-        message (types.Message): Объект сообщения от пользователя.
-        state (FSMContext): Контекст состояния FSM.
+        message: Объект сообщения от пользователя.
+        state: Контекст состояния FSM.
     """
     telegram_id: int = message.from_user.id
+    current_state = await state.get_state()
     logger.info(
-        f"Команда /start вызвана пользователем {telegram_id}. Текущее состояние: {await state.get_state()}"
+        f"Команда /start вызвана пользователем {telegram_id}. "
+        f"Текущее состояние: {current_state}"
     )
-    await state.clear()
-
-    log_command: str = "/start"
-    log_details: Optional[str] = "User started/restarted the bot"
+    if current_state:
+        await state.clear()
 
     try:
         with get_session() as db_session:
             create_user_if_not_exists(session=db_session, telegram_id=telegram_id)
-            log_user_action(db_session, telegram_id, log_command, log_details)
+            log_user_action(
+                db_session, telegram_id, "/start", "User started/restarted the bot"
+            )
 
         await message.answer(
             f"Привет, {message.from_user.full_name}! Я InfoPalBot. "
-            f"Я могу предоставить тебе актуальную информацию.\n"
-            f"Используй /help, чтобы увидеть список доступных команд."
+            "Я могу предоставить тебе актуальную информацию.\n"
+            "Используй /help, чтобы увидеть список доступных команд."
         )
     except Exception as e:
         logger.error(
-            f"Ошибка при обработке команды /start для пользователя {telegram_id}: {e}",
+            f"Ошибка при обработке /start для пользователя {telegram_id}: {e}",
             exc_info=True,
         )
         await message.answer(
@@ -88,11 +96,13 @@ async def process_start_command(message: types.Message, state: FSMContext):
 
 @router.message(Command("help"))
 async def process_help_command(message: types.Message):
-    """
-    Обрабатывает команду /help, отправляя пользователю список доступных команд.
+    """Обрабатывает команду /help.
+
+    Отправляет пользователю отформатированное сообщение со списком
+    всех доступных команд и их кратким описанием.
 
     Args:
-        message (types.Message): Объект сообщения от пользователя.
+        message: Объект сообщения от пользователя.
     """
     telegram_id: int = message.from_user.id
     help_text: str = (

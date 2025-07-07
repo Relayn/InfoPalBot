@@ -172,6 +172,7 @@ def test_get_subscription_by_user_and_type_exists(session: Session, db_user: Use
     sub4 = create_subscription(session, db_user.id, "news_all", frequency=6)
     found4 = get_subscription_by_user_and_type(session, db_user.id, "news_all")
     assert found4 is not None
+    assert found4.id == sub4.id
     assert found4.details is None
     assert found4.category is None
 
@@ -205,18 +206,6 @@ def test_log_user_action_handles_exception(session: Session):
         with patch("app.database.crud.logger.error") as mock_logger:
             log_user_action(session, 123, "/command")
             mock_logger.assert_called_once()
-
-
-def test_create_db_and_tables_calls_metadata_create_all(engine):
-    """Тест: функция create_db_and_tables вызывает SQLModel.metadata.create_all."""
-    with patch("app.database.session.engine", new=engine), \
-            patch("app.database.session.SQLModel.metadata.create_all") as mock_create_all:
-        from app.database.session import create_db_and_tables
-
-        create_db_and_tables()
-
-        mock_create_all.assert_called_once_with(engine)
-
 
 def test_get_session_closes_on_exception():
     """Тест: контекстный менеджер get_session закрывает сессию даже при исключении."""

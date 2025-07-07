@@ -16,3 +16,4 @@ __pycache__/
 app/database/infopalbot.db
 htmlcov/
 .coverage
+app/database/infopalbot.db.
